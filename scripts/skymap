@@ -1,0 +1,191 @@
+#!/usr/bin/env python3
+
+if __name__ == "__main__":
+
+    import argparse
+
+    # create the argument parser
+    parser = argparse.ArgumentParser(
+        description=("Plot the integrated geometric area " " of a given BEACON prototype.")
+    )
+
+    # and add the arguments
+    parser.add_argument(
+        "--Enu",
+        type=float,
+        required=True,
+        help="The energy of the primary neutrino [EeV].",
+    )
+    parser.add_argument(
+        "--ntrials",
+        type=int,
+        required=True,
+        help="The number of MC trials per elevation angle.",
+    )
+    parser.add_argument(
+        "--adaptive",
+        type=int,
+        default=None,
+        help="If present, use `adaptive`*ntrials at lower elevation angles.",
+    )
+    parser.add_argument(
+        "--prototype",
+        type=int,
+        choices=(2018, 2019),
+        required=True,
+        help="The BEACON prototype to simulate [2018, 2019].",
+    )
+    parser.add_argument(
+        "--antennas",
+        type=int,
+        default=4,
+        help="The number of antennas (4)."
+    )
+    parser.add_argument(
+        "--gain",
+        type=float,
+        default=None,
+        help="The peak gain (6 in 2018, 1.78 in 2019) [dBi]."
+    )
+    parser.add_argument(
+        "--frequency",
+        type=int,
+        nargs=2,
+        default=[30, 80],
+        help="The range of frequencies ((30,80))) [MHz]."
+    )
+    parser.add_argument(
+        "--trigger",
+        type=float,
+        default=5.0,
+        help="The number of sigma for the trigger threshold (5)."
+    )
+    parser.add_argument(
+        "--altitude", type=float, default=3.87553, help="The altitude of BEACON (3.87553) [km]."
+    )
+    parser.add_argument(
+        "--max-view",
+        type=float,
+        default=3.0,
+        help="The maximum view angle for trials (3.0) [degrees].",
+    )
+    parser.add_argument(
+        "--min-elev",
+        type=float,
+        default=-40.0,
+        help="The minimum payload elevation angle (-40.) [degrees].",
+    )
+    parser.add_argument(
+        "--max-elev",
+        type=float,
+        default=-1.0,
+        help="The maximum payload elevation angle (-1.) [degrees].",
+    )
+    parser.add_argument(
+        "--nelev",
+        type=int,
+        default=200,
+        help="The number of samples in elevation angle (200)",
+    )
+    parser.add_argument(
+        "--thickness",
+        type=int,
+        default=0,
+        choices=[0, 1, 2, 3, 4],
+        help="The thickness of the ice (0) [km].",
+    )
+    parser.add_argument(
+        "--average",
+        action="store_true",
+        help="If present, the skymap will be averaged over time.",
+    )
+    parser.add_argument(
+        "--nazimuth", type=int, default=1080, help="The number of points in azimuth.",
+    )
+    parser.add_argument(
+        "--no-show", action="store_true", help="If present, don't show the plot."
+    )
+    parser.add_argument(
+        "--save-plot",
+        type=str,
+        default=None,
+        help="The filename to save the plot into.",
+    )
+    parser.add_argument(
+        "--save", type=str, default=None, help="The filename to save the data into."
+    )
+
+    # parse the args
+    args = parser.parse_args()
+
+    import numpy as np
+    import poinsseta.skymap as skymap
+    import matplotlib.pyplot as plt
+
+    if args.gain is None:
+        if args.prototype == 2018:
+            args.gain = 6.0
+        elif args.prototype == 2019:
+            args.gain = 1.78
+        else:
+            raise ValueError(f"{args.prototype} is not a valid BEACON prototype for poinsseta.")
+
+    # calculate the elevation angles
+    elevations = np.linspace(args.min_elev, args.max_elev, args.nelev)
+
+    # the number of trials we use
+    ntrials = int(args.ntrials)
+
+    # if we want an adaptive number of trials,
+    if args.adaptive:
+        nntrials = np.linspace(
+            args.adaptive * ntrials, ntrials, elevations.size, dtype=int
+        )
+
+    if args.average:
+        average = True
+    else:
+        average = False
+
+    # and create the skymap
+    effsky = skymap.effective_area(
+        args.Enu * 1e18,
+        elevations,
+        average,
+        args.altitude,
+        args.prototype,
+        np.radians(args.max_view),
+        args.thickness,
+        args.nazimuth,
+        args.ntrials,
+        args.antennas,
+        args.gain,
+        args.frequency[0],
+        args.frequency[1],
+        args.trigger,
+    )
+
+    # pick the right title
+    if average:
+        title = "Average Effective Area"
+    else:
+        title = "Instantaneous Effective Area"
+
+    # and plot it
+    fig, ax = effsky.plot(prototype=args.prototype, title=title)
+
+    # and show the plot if desired
+    if not args.no_show:
+        plt.show()
+
+    # if we want to save the plot
+    if args.save_plot:
+        # save the figure
+        fig.savefig(args.save_plot)
+
+    # and save the plot if desired
+    if args.save:
+        import pickle
+
+        # and pick the skymap to disk
+        pickle.dump(effsky, open(args.save, "wb"))
