@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+
+if __name__ == "__main__":
+
+    import argparse
+
+    # create the argument parser
+    parser = argparse.ArgumentParser(
+        description=("Plot the integrated geometric area " " of a given BEACON prototype.")
+    )
+    parser.add_argument(
+        "--latitude",
+        type=float,
+        default=37.589310,
+        help="The latitude of the site in degrees.",
+    )
+    parser.add_argument(
+        "--longitude",
+        type=float,
+        default=-118.237621,
+        help="The longitude of the site in degrees.",
+    )
+    parser.add_argument(
+        "--altitude",
+        type=float,
+        default=3850.5272,
+        help="The altitude of the site in m.",
+    )
+    parser.add_argument(
+        "--nside",
+        type=int,
+        default=16,
+        help="Changes the resolution of the skymap.",
+    )
+    parser.add_argument(
+        "--ntrials",
+        type=int,
+        required=True,
+        help="The number of MC trials per elevation angle.",
+    )
+    parser.add_argument(
+        "--max-view",
+        type=float,
+        default=3.0,
+        help="The maximum view angle for trials (3.0) [degrees].",
+    )
+    parser.add_argument(
+        "--save-plot",
+        type=str,
+        default=None,
+        help="The filename to save the plot into.",
+    )
+    parser.add_argument(
+        "--save", type=str, default=None, help="The filename to save the data into."
+    )
+    parser.add_argument(
+        "--num-cpus",
+        type=int,
+        default=1,
+        help="The number of CPU cores to use."
+    )
+
+    # parse the args
+    args = parser.parse_args()
+
+import healpy as hp
+from p_tqdm import p_map
+import numpy as np
+import astropy.units as u
+import astropy.coordinates as coordinates
+import marmots.geometric_area as geometric
+import matplotlib.pyplot as plt
+from astropy.time import Time
+
+
+# the number of pixels in the healpy skymap, determined by nside
+npix = hp.nside2npix(args.nside)
+
+# the location of each pixel
+theta, phi = np.degrees(hp.pix2ang(nside=args.nside, ipix = np.arange(npix)))
+
+dec = (90 - theta)*u.deg
+ra = phi*u.deg
+
+# the location of the BEACON stations
+beacon = coordinates.EarthLocation(
+    lat=np.array([args.latitude])*u.deg,
+    lon=np.array([args.longitude])*u.deg,
+    height=np.array([args.altitude])*u.m,
+)
+
+time = Time('2022-7-18 12:00:00') - 4*u.hour
+
+def pix_loop(i):
+    source = coordinates.SkyCoord(ra=ra[i], dec=dec[i], frame='icrs')
+    altaz = source.transform_to(coordinates.AltAz(obstime=time,location=beacon))
+
+    geo = source.transform_to(coordinates.ITRS(obstime=time))
+    geo.representation_type = 'spherical'
+
+    # calculate the effective area
+    area = geometric.calculate(
+        geo,
+        altaz,
+        beacon,
+        np.radians(args.max_view)*u.rad,
+        args.ntrials,
+    )
+
+    return area
+
+geometric_area = p_map(pix_loop, np.arange(npix), **{"num_cpus": args.num_cpus})
+
+# and save the plot if desired
+if args.save:
+    
+    hp.write_map(args.save, np.array(geometric_area), overwrite=True)
+
+# if we want to save the plot
+if args.save_plot:
+
+    hp.projview(
+    np.array(geometric_area),
+    coord=["E"],
+    graticule=True,
+    graticule_labels=True,
+    unit=r"Geometric Area [$km^2$]",
+    xlabel=r"Right Ascension [$^\circ$]",
+    ylabel=r"Declination [$^\circ$]",
+    cb_orientation="horizontal",
+    projection_type="mollweide",
+    )
+
+    # save the figure
+    plt.savefig(args.save_plot)
+
+    plt.close()

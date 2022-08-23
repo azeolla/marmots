@@ -4,7 +4,7 @@ noise properties of the sky.
 """
 import numpy as np
 
-from poinsseta.constants import c_km, k_b
+from marmots.constants import c_km, k_b
 
 __all__ = [
     "noise_temperature",

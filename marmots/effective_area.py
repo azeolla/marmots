@@ -11,16 +11,16 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
 import numpy as np
 from tqdm import tqdm
+from scipy.fft import irfft
 
-import poinsseta.antenna as antenna
-import poinsseta.decay as decay
+import marmots.antenna as antenna
+import marmots.decay as decay
 
-# import poinsseta.events as events
-import poinsseta.geometry as geometry
-import poinsseta.tauola as tauola
-import poinsseta.trigger as trigger
-from poinsseta.efield import EFieldParam
-from poinsseta.tauexit import TauExitLUT
+# import marmots.events as events
+import marmots.geometry as geometry
+import marmots.tauola as tauola
+from marmots.efield import EFieldParam
+from marmots.tauexit import TauExitLUT
 
 
 # we provide the results of the effective area calculation in a tuple
@@ -213,16 +213,12 @@ class EffectiveArea:
 
 def calculate(
     Enu: float,
-    elev: np.ndarray,
-    altitude: float = 3.87553,
-    prototype: int = 2018,
+    altaz: Any,
+    beacon: Any,
     maxview: float = np.radians(3.0),
-    icethickness: int = 0,
     N: Union[np.ndarray, int] = 1_000_000,
     antennas: int = 4,
-    gain: float = 6.0,
-    minfreq: float = 30,
-    maxfreq: float = 80,
+    freqs: np.ndarray = np.arange(30,80,10)+5,
     trigger_sigma: float = 5.0,
 ) -> EffectiveArea:
     """
@@ -241,19 +237,12 @@ def calculate(
         The prototype number for this BEACON trial.
     maxview: float
         The maximum view angle (in degrees).
-    icethickness: int
-        The thickness of the ice (in km).
-        We currently support 0, 1, 2, 3, 4.
     N: Union[int, np.ndarray]
         The number of trials to use for geometric area.
     antennas: int
         The number of antennas.
-    gain: float
-        The peak gain (in dBi).
-    minfreq: float
-        The minimum frequency (in MHz).
-    maxfreq: float
-        The maximum frequency (in MHz).
+    freqs: numpy array
+        The frequencies at which to calculate the electric field (in MHz).
     trigger_sigma: float
         The number of sigma for the trigger threshold.
 
@@ -264,14 +253,15 @@ def calculate(
     """
 
     # we make sure that elevation is at least an array
-    elev = np.atleast_1d(elev)
+    elev = np.atleast_1d(altaz.alt)
+    az = np.atleast_1d(altaz.az)
 
     # make N an array if it's not already
     if not isinstance(N, np.ndarray):
         N = N * np.ones(elev.size, dtype=int)
 
     # load the corresponding tau exit LUT
-    tauexit = TauExitLUT(energy=Enu, thickness=icethickness)
+    tauexit = TauExitLUT(energy=Enu, thickness=0)
 
     # load the field parameterization.
     altitudes = np.array([0.5, 1.0, 2.0, 3.0, 4.0, 37.0])
@@ -289,23 +279,12 @@ def calculate(
     ptrigger = np.zeros_like(elev)
     Anoise = np.zeros_like(elev)
 
-    # the frequencies over which we calculate field quantities
-    freqs = np.arange(minfreq, maxfreq, 10.0)
-    # the central frequencies of each 10 MHz sub-band
-    c_freqs = np.arange(minfreq + 5, maxfreq, 10.0)
-
-    # get the trigger voltage
-    Vtrig = trigger.trigger_level(c_freqs, prototype, antennas, trigger_sigma)
-
-    # calculate the integrated noise voltage across the band
-    Vn_spectrum = antenna.noise_voltage(c_freqs, prototype, antennas)
-
     # loop over each elevation angle
-    for i in tqdm(np.arange(elev.shape[0])):
+    for i in np.arange(elev.shape[0]):
 
         # compute the geometric area at the desired elevation angles
         Ag = geometry.geometric_area(
-            altitude, maxview, elev[i], 0, N=N[i], ice=icethickness
+            altitude, maxview, elev[i], 0, N=N[i], ice=0
         )
 
         # if we didn't get any passing events, just skip this trial
@@ -334,7 +313,7 @@ def calculate(
 
         # and get the altitude at the decay point
         decay_altitude = geometry.decay_altitude(
-            Ag.emergence, decay_length, icethickness
+            Ag.emergence, decay_length, thickness=0
         )
 
         # get the zenith angle at the exit point
@@ -359,17 +338,10 @@ def calculate(
         # sample the random noise amplitude density and integrate it
         # the Rayleigh-distributed noise vector projected onto the
         # Hpol-axis ends up as a half-normal distributed noise amplitude
-        Vn = np.sqrt(
-            np.sum(
-                np.abs(
-                    np.random.normal(loc=0, scale=Vn_spectrum ** 2.0, size=V.T.shape).T,
-                ),
-                axis=0,
-            )
-        )
+        noise = antenna.get_random_noise(freqs, V.size)
 
         # and check for a trigger
-        Ptrig = (np.sum(V, axis=0) / Vn) > trigger_sigma
+        Ptrig = (np.sum(V, axis=0) / noise) > trigger_sigma
 
         # the probability that noise triggers the payload
         PNtrig = Vn > Vtrig
@@ -460,5 +432,5 @@ def from_files(filenames: List[str]) -> EffectiveArea:
     return Aeff
 
 
-# this lets us load pickled files from older poinsseta versions.
+# this lets us load pickled files from older marmots versions.
 AcceptanceResult = EffectiveArea

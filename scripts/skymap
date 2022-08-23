@@ -48,7 +48,7 @@ if __name__ == "__main__":
         help="The peak gain (6 in 2018, 1.78 in 2019) [dBi]."
     )
     parser.add_argument(
-        "--frequency",
+        "--bandwidth",
         type=int,
         nargs=2,
         default=[30, 80],
@@ -119,7 +119,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     import numpy as np
-    import poinsseta.skymap as skymap
+    import marmots.skymap as skymap
     import matplotlib.pyplot as plt
 
     if args.gain is None:
@@ -147,6 +147,8 @@ if __name__ == "__main__":
     else:
         average = False
 
+    freqs = np.arange(args.bandwidth[0], args.bandwidth[1], 10) + 5
+
     # and create the skymap
     effsky = skymap.effective_area(
         args.Enu * 1e18,
@@ -160,8 +162,7 @@ if __name__ == "__main__":
         args.ntrials,
         args.antennas,
         args.gain,
-        args.frequency[0],
-        args.frequency[1],
+        freqs,
         args.trigger,
     )
 
