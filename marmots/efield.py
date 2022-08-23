@@ -10,9 +10,9 @@ from interpolation.splines import CGrid, eval_linear
 from numba import njit
 from scipy.interpolate import interpn
 
-import poinsseta.antenna as antenna
-from poinsseta import data_directory
-from poinsseta.constants import Re
+import marmots.antenna as antenna
+from marmots import data_directory
+from marmots.constants import Re
 
 
 def get_distance_decay_to_detector(
@@ -147,7 +147,7 @@ class EFieldParam(object):
             fill_value=None,
         )
 
-        # calculate the distance from decay to detector in Poinsseta
+        # calculate the distance from decay to detector in marmots
         distance_decay_km = distance_decay_detector(
             trials, axis, decay_length, beacon
         )
@@ -166,7 +166,7 @@ class EFieldParam(object):
             -((view[view > 3.16] - 0.0) ** 2) / (2 * 3.16) ** 2
         )
 
-        # distance correction (ZHAireS distance over Poinsseta distance)
+        # distance correction (ZHAireS distance over marmots distance)
         voltage *= r_zhaires_tau_shower / distance_decay_km
 
         # energy scaling

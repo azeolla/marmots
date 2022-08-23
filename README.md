@@ -1,11 +1,11 @@
-# Multiple Antenna aRrays on MOuntains Tau Sensitivity (MARMOTS)
+# Multiple Antenna Arrays on Mountains Tau Sensitivity (Marmots)
 
 [![Actions Status](https://github.com/azeolla/marmots/workflows/CI/badge.svg)](https://github.com/azeolla/marmots/actions)
 ![GitHub](https://img.shields.io/github/license/rprechelt/tapioca?logoColor=brightgreen)
 ![Python](https://img.shields.io/badge/python-3.6%20%7C%203.7%20%7C%203.8-blue)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-Marmots (**M**ultiple **A**ntenna a**R**rays on **MO**untains **T**tau **S**ensitivity) is a suite of tools used to calculate the tau point-source sensitivity of the [Beamforming Elevated Array for Cosmic Neutrinos]() (BEACON). 
+Marmots (**M**ultiple **A**ntenna A**r**rays on **Mo**untains **T**au **S**ensitivity) is a suite of tools used to calculate the tau point-source sensitivity of the [Beamforming Elevated Array for Cosmic Neutrinos]() (BEACON). 
 
 ### Installation
 

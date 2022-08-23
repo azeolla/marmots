@@ -5,11 +5,11 @@ import os.path as path
 # our global version number
 __version__ = "0.1.0"
 
-# the parent poinsseta directory
+# the parent marmots directory
 parent = path.dirname(path.dirname(path.abspath(__file__)))
 
-# we use `data` unless the user overrides with POINSSETA_DATA_DIR
-data_directory = os.getenv("POINSSETA_DATA_DIR") or path.join(parent, "data")
+# we use `data` unless the user overrides with marmots_DATA_DIR
+data_directory = os.getenv("MARMOTS_DATA_DIR") or path.join(parent, "data")
 
 # the directory where we store test figures
 figdir = path.join(parent, *("tests", "figures"))

@@ -1,19 +1,21 @@
 from typing import Optional, Tuple, Union
 
 import astropy.coordinates as coordinates
-import astropy.units as units
+import astropy.units as u
+from astropy.time import Time
 import attr
 import matplotlib
 import matplotlib.colors as colors
 import matplotlib.pyplot as plt
 import numpy as np
 import numpy.ma as ma
-from astropy.time import Time
+import healpy as hp
+from p_tqdm import p_map
+
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
-import poinsseta.auger as auger
-import poinsseta.effective_area as eff
-import poinsseta.flightpath as flightpath
+import marmots.effective_area as eff
+import marmots.flightpath as flightpath
 
 from scipy.ndimage import gaussian_filter
 #from sklearn import preprocessing
@@ -167,19 +169,16 @@ class Skymap:
 
 def effective_area(
     Enu: float,
-    elevations: np.ndarray,
-    average: bool,
-    altitude: float = 3.87553,
-    prototype: int = 2018,
+    latitude: np.ndarray,
+    longitude: np.ndarray,
+    altitude: np.ndarray,
     maxview: float = np.radians(3.0),
-    thickness: int = 0,
-    nazimuth: int = 720,
+    nside: int = 16,
     N: Union[np.ndarray, int] = 1_000_000,
     antennas: int = 4,
-    gain: float = 6.0,
-    minfreq: float = 30,
-    maxfreq: float = 80,
+    freqs: np.ndarray = np.arange(30,80,10)+5,
     trigger_sigma: float = 5,
+    num_cpus: int = 1,
 ) -> Skymap:
     """
     Produce an (RA, declination) skymap of the geometric
@@ -206,104 +205,50 @@ def effective_area(
         The sampled geometric area at each bin [km^2].
     """
 
-    # load the correct flight path
-    path = flightpath.load_prototype(prototype)
+    # the number of pixels in the healpy skymap, determined by nside
+    npix = hp.nside2npix(nside)
 
-    # the number of steps in elevation and azimuth
-    nelevation = elevations.size
+    # the location of each pixel
+    theta, phi = np.degrees(hp.pix2ang(nside=16, ipix = np.arange(npix)))
 
-    # and the corresponding resolutions
-    dazimuth = 360.0 / nazimuth
-    delevation = np.abs(elevations.max() - elevations.min()) / nelevation
+    dec = 90 - theta
+    ra = phi
 
-    # create the array of azimuths
-    azimuths = np.arange(-180.0, 180.0 + dazimuth, dazimuth)
-
-    # and mesh these
-    alt = np.repeat(elevations, azimuths.size)
-    az = np.tile(azimuths, elevations.size)
-
-    # the R/A and dec that we use to fill the skymap
-    ra = np.linspace(0.0, 360.0, nazimuth)
-    dec = np.arange(-90.0, 90.0 + delevation, 1.05 * delevation)
-
-    # and the array to store the geometric area
-    skymap = np.zeros((ra.size, dec.size))
-
-    # choose random points along the path
-    # locations = np.random.randint(path.latitude.shape[0], size=npoints)
-
-    # choose the first point
-    locations = [0]
-
-    # the location of BEACON at each of these points
+    # the location of the BEACON stations
     beacon = coordinates.EarthLocation(
-        lat=path.latitude[locations] * units.deg,
-        lon=path.longitude[locations] * units.deg,
-        height=path.altitude[locations] * units.m,
+        lat=latitude * u.deg,
+        lon=longitude * u.deg,
+        height=altitude * u.m,
     )
 
-    # and get the time of of each prototype location
-    time = Time(path.realTime[locations], format="unix")
+    time = Time('2022-7-18 12:00:00') - 4*u.hour
 
-    # construct the array of AltAz locations
-    altaz = coordinates.AltAz(
-        alt=alt * units.deg, az=az * units.deg, obstime=time[0], location=beacon[0]
-    )
+    def pix_loop(i):
+        source = coordinates.SkyCoord(ra=ra[i]*u.degree, dec=dec[i]*u.degree, frame='icrs')
+        altaz = source.transform_to(coordinates.AltAz(obstime=time,location=beacon))
 
-    # and put these in RA/DEC
-    skycoord = altaz.transform_to(coordinates.ICRS)
+        geo = source.transform_to(coordinates.ITRS(obstime=time))
+        geo.representation_type = 'spherical'
 
-    # calculate the effective area
-    Aeff = eff.calculate(
-        Enu,
-        np.radians(elevations),
-        altitude,
-        prototype,
-        maxview,
-        thickness,
-        N,
-        antennas,
-        gain,
-        minfreq,
-        maxfreq,
-        trigger_sigma,
-    )
+        # calculate the effective area
+        Aeff = eff.calculate(
+            Enu,
+            geo,
+            altaz,
+            beacon,
+            maxview,
+            N,
+            antennas,
+            freqs,
+            trigger_sigma,
+        )
 
-    # find the indices into the skymap
-    ira = np.round(np.interp(skycoord.ra.value, ra, np.arange(ra.size)))
-    idec = np.round(np.interp(skycoord.dec.value, dec, np.arange(dec.size)))
+        return Aeff
 
-    # and make sure they are int's
-    ira = ira.astype(int)
-    idec = idec.astype(int)
-
-    # it's possible to get some weird aliasing issues so let's apply
-    # a basic bilinear anti-aliasing filter using np.random.normal
-    # to blur the samples in each direction by one or two pixels.
-    ira += +np.random.normal(loc=0, scale=1, size=ira.size).astype(int)
-    idec += np.random.normal(loc=0, scale=1, size=idec.size).astype(int)
-
-    # make sure ira and idec are clipped to the right range.
-    ira = np.clip(ira, 0, ra.size - 1)
-    idec = np.clip(idec, 0, dec.size - 1)
-
-    # extract the effective area at each elevation angle
-    effective = Aeff.effective_area
-
-    # and add the points to the skymap
-    skymap[ira, idec] += np.repeat(effective, azimuths.size)
-
-    # for a skymap of the average effective area
-    # slide the skymap along the RA and sum, then take the average.
-    if average:
-        for i in range(1, ra.size):
-            ira2 = ira + i
-            for j in range(0, ira2.size):
-                if ira2[j] > (ra.size - 1):
-                    ira2[j] = ira2[j] - (ra.size)
-            skymap[ira2, idec] += np.repeat(effective, azimuths.size)
-        skymap /= ra.size
+    effective_area = p_map(pix_loop, np.arange(npix), **{"num_cpus": num_cpus})
 
     # and return the required quantities
     return Skymap(N, ra, dec, skymap)
+
+
+

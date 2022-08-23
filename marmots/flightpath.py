@@ -8,7 +8,7 @@ from typing import Any
 
 import uproot3 as uproot
 
-from poinsseta import data_directory
+from marmots import data_directory
 
 
 def load_prototype(prototype: int) -> Any:
