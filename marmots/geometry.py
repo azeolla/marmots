@@ -253,10 +253,7 @@ def points_on_earth(
     maxaz = altaz.az.to(u.rad) + view
 
     # if we're looking closing to straight down then maxview will be greater than 90 deg.
-    # in this case we find the area of spherical cap
-    minaz[maxview < -np.pi/2*u.rad] = 0*u.rad
-    maxaz[maxview < -np.pi/2*u.rad] = 2*np.pi*u.rad
-
+    
     maxview[maxview < -np.pi/2*u.rad] = -np.pi/2*u.rad
 
     # find the indices in which the Earth is not in sight
