@@ -8,8 +8,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description=("Plot the integrated geometric area " " of a given BEACON prototype.")
     )
-
-    # and add the arguments
     parser.add_argument(
         "--Enu",
         type=float,
@@ -17,35 +15,28 @@ if __name__ == "__main__":
         help="The energy of the primary neutrino [EeV].",
     )
     parser.add_argument(
+        "--antennas",
+        type=int,
+        default=10,
+        help="The number of antennas per station (10)."
+    )
+    parser.add_argument(
+        "--stations",
+        type=str,
+        default=None,
+        help="The file containing the lat, lon, altitude, and orientation of each station.",
+    )
+    parser.add_argument(
+        "--nside",
+        type=int,
+        default=16,
+        help="Changes the resolution of the skymap.",
+    )
+    parser.add_argument(
         "--ntrials",
         type=int,
         required=True,
         help="The number of MC trials per elevation angle.",
-    )
-    parser.add_argument(
-        "--adaptive",
-        type=int,
-        default=None,
-        help="If present, use `adaptive`*ntrials at lower elevation angles.",
-    )
-    parser.add_argument(
-        "--prototype",
-        type=int,
-        choices=(2018, 2019),
-        required=True,
-        help="The BEACON prototype to simulate [2018, 2019].",
-    )
-    parser.add_argument(
-        "--antennas",
-        type=int,
-        default=4,
-        help="The number of antennas (4)."
-    )
-    parser.add_argument(
-        "--gain",
-        type=float,
-        default=None,
-        help="The peak gain (6 in 2018, 1.78 in 2019) [dBi]."
     )
     parser.add_argument(
         "--bandwidth",
@@ -58,10 +49,7 @@ if __name__ == "__main__":
         "--trigger",
         type=float,
         default=5.0,
-        help="The number of sigma for the trigger threshold (5)."
-    )
-    parser.add_argument(
-        "--altitude", type=float, default=3.87553, help="The altitude of BEACON (3.87553) [km]."
+        help="The SNR trigger threshold (5)."
     )
     parser.add_argument(
         "--max-view",
@@ -70,40 +58,10 @@ if __name__ == "__main__":
         help="The maximum view angle for trials (3.0) [degrees].",
     )
     parser.add_argument(
-        "--min-elev",
+        "--fov",
         type=float,
-        default=-40.0,
-        help="The minimum payload elevation angle (-40.) [degrees].",
-    )
-    parser.add_argument(
-        "--max-elev",
-        type=float,
-        default=-1.0,
-        help="The maximum payload elevation angle (-1.) [degrees].",
-    )
-    parser.add_argument(
-        "--nelev",
-        type=int,
-        default=200,
-        help="The number of samples in elevation angle (200)",
-    )
-    parser.add_argument(
-        "--thickness",
-        type=int,
-        default=0,
-        choices=[0, 1, 2, 3, 4],
-        help="The thickness of the ice (0) [km].",
-    )
-    parser.add_argument(
-        "--average",
-        action="store_true",
-        help="If present, the skymap will be averaged over time.",
-    )
-    parser.add_argument(
-        "--nazimuth", type=int, default=1080, help="The number of points in azimuth.",
-    )
-    parser.add_argument(
-        "--no-show", action="store_true", help="If present, don't show the plot."
+        default=120,
+        help="The field of view of a station (120) [degrees]."
     )
     parser.add_argument(
         "--save-plot",
@@ -112,81 +70,121 @@ if __name__ == "__main__":
         help="The filename to save the plot into.",
     )
     parser.add_argument(
-        "--save", type=str, default=None, help="The filename to save the data into."
+        "--save", type=str, default=None, help="The directory to save the data into."
+    )
+    parser.add_argument(
+        "--num-cpus",
+        type=int,
+        default=1,
+        help="The number of CPU cores to use."
     )
 
     # parse the args
     args = parser.parse_args()
 
-    import numpy as np
-    import marmots.skymap as skymap
-    import matplotlib.pyplot as plt
+import healpy as hp
+from p_tqdm import p_map
+import numpy as np
+import astropy.units as u
+import astropy.coordinates as coordinates
+import marmots.effective_area as effective_area
+import matplotlib.pyplot as plt
+from astropy.time import Time
 
-    if args.gain is None:
-        if args.prototype == 2018:
-            args.gain = 6.0
-        elif args.prototype == 2019:
-            args.gain = 1.78
-        else:
-            raise ValueError(f"{args.prototype} is not a valid BEACON prototype for poinsseta.")
 
-    # calculate the elevation angles
-    elevations = np.linspace(args.min_elev, args.max_elev, args.nelev)
+# the number of pixels in the healpy skymap, determined by nside
+npix = hp.nside2npix(args.nside)
 
-    # the number of trials we use
-    ntrials = int(args.ntrials)
+# the location of each pixel
+theta, phi = np.degrees(hp.pix2ang(nside=args.nside, ipix = np.arange(npix)))
 
-    # if we want an adaptive number of trials,
-    if args.adaptive:
-        nntrials = np.linspace(
-            args.adaptive * ntrials, ntrials, elevations.size, dtype=int
-        )
+dec = (90 - theta)*u.deg
+ra = phi*u.deg
 
-    if args.average:
-        average = True
-    else:
-        average = False
+stations = np.loadtxt(args.stations).T
 
-    freqs = np.arange(args.bandwidth[0], args.bandwidth[1], 10) + 5
+lat = stations[0]*u.deg
+lon = stations[1]*u.deg
+altitude = stations[2]*u.km
+orientations = stations[3]*u.deg
+fov = stations[4]*u.deg
 
-    # and create the skymap
-    effsky = skymap.effective_area(
+# the location of the BEACON stations
+beacon = coordinates.EarthLocation(
+    lat=lat,
+    lon=lon,
+    height=altitude,
+)
+
+time = Time('2022-7-18 12:00:00') - 4*u.hour
+
+freqs = np.arange(args.bandwidth[0], args.bandwidth[1], 10)+5
+
+def pix_loop(i):
+    source = coordinates.SkyCoord(ra=ra[i], dec=dec[i], frame='icrs')
+    altaz = source.transform_to(coordinates.AltAz(obstime=time,location=beacon))
+
+    geo = source.transform_to(coordinates.ITRS(obstime=time))
+    geo.representation_type = 'spherical'
+
+    # calculate the effective area
+    results = effective_area.calculate(
         args.Enu * 1e18,
-        elevations,
-        average,
-        args.altitude,
-        args.prototype,
-        np.radians(args.max_view),
-        args.thickness,
-        args.nazimuth,
+        geo,
+        altaz,
+        beacon,
+        orientations,
+        fov,
+        np.radians(args.max_view)*u.rad,
         args.ntrials,
         args.antennas,
-        args.gain,
         freqs,
         args.trigger,
     )
 
-    # pick the right title
-    if average:
-        title = "Average Effective Area"
-    else:
-        title = "Instantaneous Effective Area"
+    return results
 
-    # and plot it
-    fig, ax = effsky.plot(prototype=args.prototype, title=title)
+results = p_map(pix_loop, np.arange(npix), **{"num_cpus": args.num_cpus})
 
-    # and show the plot if desired
-    if not args.no_show:
-        plt.show()
+results = np.array(results).T
 
-    # if we want to save the plot
-    if args.save_plot:
-        # save the figure
-        fig.savefig(args.save_plot)
+geometric = results[0]
+pexit = results[1]
+pdet = results[2]
+effective = results[3]
 
-    # and save the plot if desired
-    if args.save:
-        import pickle
+average = np.zeros(effective.size)
+for i in range(359):
+    r = hp.Rotator(coord=['E'], rot=[i,0,0])
+    m2 = r.rotate_map_pixel(effective)
+    average += m2
+average /= 360
 
-        # and pick the skymap to disk
-        pickle.dump(effsky, open(args.save, "wb"))
+# and save the plot if desired
+if args.save:
+    
+    hp.write_map(args.save+"geometric.FITS", geometric, overwrite=True)
+    hp.write_map(args.save+"pexit.FITS", pexit, overwrite=True)
+    hp.write_map(args.save+"pdet.FITS", pdet, overwrite=True)
+    hp.write_map(args.save+"effective.FITS", effective, overwrite=True)
+    hp.write_map(args.save+"average.FITS", average, overwrite=True)
+
+# if we want to save the plot
+if args.save_plot:
+
+    hp.projview(
+    effective,
+    coord=["E"],
+    graticule=True,
+    graticule_labels=True,
+    unit=r"Geometric Area [$km^2$]",
+    xlabel=r"Right Ascension [$^\circ$]",
+    ylabel=r"Declination [$^\circ$]",
+    cb_orientation="horizontal",
+    projection_type="mollweide",
+    )
+
+    # save the figure
+    plt.savefig(args.save_plot)
+
+    plt.close()

@@ -38,21 +38,21 @@ Eem = np.sort(decays["electron"][decays["electron"] > 0.0])
 Ehad = np.sort(decays["hadron"][decays["hadron"] > 0.0])
 
 
-def sample_tau_energies(Enu: float, N: int = 1) -> np.ndarray:
+def sample_shower_energies(Etau: float, N: int = 1) -> np.ndarray:
     """
-    Return `N` randomly sampled tau energies.
+    Return `N` randomly sampled shower energies.
 
     Parameters
     ----------
-    Enu: float
-       The energy of the tau neutrino (eV).
+    Etau: float
+       The energy of the tau lepton (eV).
     N: int
-       The number of tau lepton energies to sample.
+       The number of shower energies to sample.
 
     Returns
     -------
-    Etau: np.ndarray
-        `N` randomly sampled tau energies (eV).
+    Eshower: np.ndarray
+        `N` randomly sampled shower energies (eV).
     """
 
     # random sample a set of shower types
@@ -62,7 +62,7 @@ def sample_tau_energies(Enu: float, N: int = 1) -> np.ndarray:
     Efrac = sample_energy_fraction(stypes)
 
     # and return the corresponding energy of tau's
-    return Enu * Efrac
+    return Etau * Efrac
 
 
 def sample_energy_fraction(stypes: np.ndarray) -> np.ndarray:
