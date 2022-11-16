@@ -4,8 +4,7 @@ noise properties of the sky.
 """
 import numpy as np
 
-from marmots.constants import c_km, k_b
-
+from marmots.constants import c, k_b
 __all__ = [
     "noise_temperature",
     "galactic_noise",
@@ -46,14 +45,7 @@ def power_to_temperature(freqs: np.ndarray, power: np.ndarray) -> np.ndarray:
        The corresponding noise temperature (in Kelvin)./
     """
 
-    # compute the frequencies in Hz
-    nu = freqs * 1e6
-
-    # and the true speed of light
-    c = c_km * 1e3
-
-    # and we are done
-    return (power / k_b) * (c * c / (2 * nu * nu))
+    return (1/2) * (c**2) * (power/k_b) * (1/freqs**2) * 1e6
 
 
 def galactic_noise(freqs: np.ndarray) -> np.ndarray:

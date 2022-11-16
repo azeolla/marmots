@@ -2,6 +2,7 @@
 This module provides free-functions for calculating various
 needed geometric quantities and formulas.
 """
+from shutil import ReadError
 from typing import Any, NamedTuple, Tuple
 
 import numpy as np
@@ -12,6 +13,7 @@ from shapely.ops import unary_union, split, transform
 from math import remainder
 
 from marmots.constants import Re
+import pymap3d as pm
 
 __all__ = [
     "view_angle",
@@ -24,6 +26,8 @@ __all__ = [
     "random_surface_point",
     "spherical_to_cartesian",
     "geometric_area",
+    "obs_zenith_azimuth",
+    "distance_to_horizon"
 ]
 
 # create a named tuple to store our geometry information
@@ -35,10 +39,12 @@ GeometricArea = NamedTuple(
         ("emergence", np.ndarray),
         ("view", np.ndarray),
         ("dbeacon", np.ndarray),
-        ("beacon", np.ndarray),
+        ("stations", np.ndarray),
         ("trials", np.ndarray),
         ("axis", np.ndarray),
-        ("to_beacon", np.ndarray)
+        ("to_beacon", np.ndarray),
+        ("orientations", np.ndarray),
+        ("fov", np.ndarray),
     ],
 )
 
@@ -48,6 +54,8 @@ def geometric_area(
     source: coordinates.SkyCoord,
     altaz: Any,
     maxview: float,
+    orientations: np.ndarray,
+    fov: np.ndarray,
     N: int = 10_000,
 ):
     """
@@ -87,11 +95,11 @@ def geometric_area(
     axis = -spherical_to_cartesian(theta, phi, r=1.0)[0]
 
     # generate N random points in the corresponding segment
-    trials, A0, stations = points_on_earth(beacon, altaz, maxview, N)
+    trials, A0, stations, orientations, fov = points_on_earth(beacon, altaz, maxview, orientations, fov, N)
 
     if (trials.size == 0):
 
-        return GeometricArea(A0, np.array([]), np.array([]), np.array([]), np.array([]), np.array([]), np.array([]), axis, np.array([]))
+        return GeometricArea(A0, np.array([]), np.array([]), np.array([]), np.array([]), np.array([]), np.array([]), axis, np.array([]), np.array([]), np.array([]))
 
     else:
 
@@ -126,43 +134,16 @@ def geometric_area(
         to_beacon = to_beacon / dbeacon[:,:,None]
 
         # and we are done
-        return GeometricArea(A0, dot, emergence, view, dbeacon, stations, trials[valid], axis, to_beacon)
+        return GeometricArea(A0, dot, emergence, view, dbeacon, stations, trials[valid], axis, to_beacon, orientations, fov)
 
 
 def decay_view(
-    exitview: np.ndarray, dbeacon: np.ndarray, trange: np.ndarray
+    decay_point: np.ndarray, axis: np.ndarray, station: np.ndarray,
 ) -> np.ndarray:
-    """
-    Given the view angle at the exit location, the distance to BEACON
-    along this view angle, and the tau lepton range, calculate the
-    view angle (radians) from the decay point.
 
-    This formula can easily be derived by applying the sine rule
-    and the cosine rule to the triangle formed by `trange`, `drange`,
-    and `exitview`.
-
-    Parameters
-    ----------
-    exitview: np.ndarray
-        The view angle (radians) at the exit location.
-    dbeacon: np.ndarray
-        The distance from the exit point to BEACON along the view angle.
-    trange: np.ndarray
-        The distance the tau travels before decaying.
-
-    Returns
-    -------
-    decayview: np.ndarray
-        The view angle of BEACON from the location of the tau decay.
-    """
-
-    # this is sin^2(phi) where phi is our view angle from decay
-    s2phi = (dbeacon * np.sin(exitview)) ** 2.0 / (
-        trange * trange + dbeacon * dbeacon - 2 * trange * dbeacon * np.cos(exitview)
-    )
-
-    # and we are done
-    return np.arcsin(np.sqrt(s2phi))
+    d = station - decay_point
+    
+    return np.arccos(np.dot(d/np.linalg.norm(d, axis=1)[:,None], axis)) 
 
 
 def view_angle(point: np.ndarray, obspoint: np.ndarray, axis: np.ndarray, N: int) -> np.ndarray:
@@ -207,6 +188,8 @@ def points_on_earth(
     beacon: coordinates.EarthLocation,
     altaz: Any,
     view: float,
+    orientations: np.ndarray,
+    fov: np.ndarray,
     N: int = 1_000,
 ) -> np.ndarray:
     """
@@ -317,9 +300,11 @@ def points_on_earth(
 
         # the cartesian coordinates of the stations with land in view
         stations = spherical_to_cartesian(station_theta, station_phi, Re+station_height)
+        orientations = orientations[~invalid]
+        fov = fov[~invalid]
 
     # and return the trials, area, and valid stations
-    return rtrials, A0, stations
+    return rtrials, A0, stations, orientations, fov
 
 
 def rotate_earth(point, theta, phi):
@@ -682,38 +667,39 @@ def spherical_to_cartesian(
     return r[:, None] * cartesian
 
 
-def decay_zenith(emergence: np.ndarray, decay_length: np.ndarray) -> np.ndarray:
+def decay_zenith_azimuth(decay_point: np.ndarray, axis: np.ndarray) -> np.ndarray:
     """
-    Give the emergence angle at the surface, calculate the zenith angle at
-    the decay point given the decay_length.
+    Returns the zenith angle and azimuth angle (measured from East to North) of a shower as measured at the decay point
+
 
     Parameters
     ----------
-    emergence: np.ndarray
-        The emergence angle at the surface (radians)
-    decay_length: np.ndarray
-        The decay length from the surface (in km).
+    axis: np.ndarray
+        A shape=(3,) array of the geocentric x,y,z coordinates of shower axis (km)
+    decay_point: np.ndarray
+        A shape=(N,3) array of the geocentric x,y,z coordinates of the decay points (km).
 
     Returns
     -------
-    zenith_angle: np.ndarray
-        The trajectory zenith angle at the decay point.
+    theta: np.ndarray
+        The zenith angle of each shower from a line normal to the Earth centered on the decay point (rad).
+    phi: np.ndarray
+        The azimuth angle (measured from East to North) of each shower relative to the decay point (rad).
     """
 
-    # calculate the local zenith angle
-    local_zenith = np.pi / 2.0 - emergence
+    axis = coordinates.EarthLocation(x=decay_point[:,0]+axis[0], y=decay_point[:,1]+axis[1], z=decay_point[:,2]+axis[2])
+    decay_point = coordinates.EarthLocation(x=decay_point[:,0], y=decay_point[:,1], z=decay_point[:,2])
+    
+    enu = pm.geodetic2enu(axis.lat.value, axis.lon.value, axis.height.to(u.m).value, lat0=decay_point.lat.value, lon0=decay_point.lon.value, h0=decay_point.height.to(u.m).value)
 
-    # use the law of cosines to calculate the length of
-    # the radial vector at the decay point
-    r2 = Re ** 2.0 + decay_length ** 2.0 + 2 * Re * decay_length * np.cos(local_zenith)
+    enu = np.array(enu).T
 
-    # and use the sine-rule to convert this to a zenith at decay
-    zenith: np.ndarray = np.arcsin(
-        np.sqrt((Re ** 2.0 / r2) * (np.sin(local_zenith) ** 2.0))
-    )
+    rthetaphi = cartesian_to_spherical(np.array(enu))
 
-    # and we are done
-    return zenith
+    theta = rthetaphi[:,1]*u.rad
+    phi = rthetaphi[:,2]*u.rad
+
+    return theta, phi
 
 
 def decay_altitude(
@@ -756,3 +742,57 @@ def decay_altitude(
     altitude: np.ndarray = geocentric - Re
 
     return altitude
+
+def obs_zenith_azimuth(
+    station: np.ndarray, decay_point: np.ndarray) -> np.ndarray:
+    """
+    Returns the zenith angle and azimuth angle (measured from East to North) at which the decay points are located relative to the station.
+
+
+    Parameters
+    ----------
+    station: np.ndarray
+        A shape=(3,) array of the geocentric x,y,z coordinates of the station (km)
+    decay_point: np.ndarray
+        A shape=(N,3) array of the geocentric x,y,z coordinates of the decay points (km).
+
+    Returns
+    -------
+    theta: np.ndarray
+        The zenith angle of each decay point from a line normal to the Earth centered on the station (rad).
+    phi: np.ndarray
+        The azimuth angle (measured from East to North) of each decay point relative to the station (rad).
+    """
+
+    station = coordinates.EarthLocation(x=station[0], y=station[1], z=station[2])
+    decay_point = coordinates.EarthLocation(x=decay_point[:,0], y=decay_point[:,1], z=decay_point[:,2])
+
+    enu = pm.geodetic2enu(decay_point.lat.value, decay_point.lon.value, decay_point.height.to(u.m).value, lat0=station.lat.value, lon0=station.lon.value, h0=station.height.to(u.m).value)
+
+    enu = np.array(enu).T
+
+    rthetaphi = cartesian_to_spherical(np.array(enu))
+
+    theta = rthetaphi[:,1]*u.rad
+    phi = rthetaphi[:,2]*u.rad
+
+    return theta, phi 
+
+def distance_to_horizon(height: np.ndarray, radius: float = Re) -> np.ndarray:
+    """
+    Calculate the distance to the horizon from a given altitude
+    with a given ice thickness.
+
+    Parameters
+    ----------
+    height: np.ndarray
+        The payload altitude in km.
+    thickness: np.ndarray
+        The ice thickness in km.
+
+    Returns
+    -------
+    distance: np.ndarray
+        The distance to the payload in km.
+    """
+    return (radius + height) * np.sin(-horizon_angle(height, radius))
