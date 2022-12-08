@@ -1,6 +1,0 @@
-data/flightpaths filter=lfs diff=lfs merge=lfs -text
-data/tauola_decay.dat filter=lfs diff=lfs merge=lfs -text
-data/anita/anita_generic_parameterization_180-1200MHz_TUFFs.npz filter=lfs diff=lfs merge=lfs -text
-data/anita/anita_generic_parameterization_300-900MHz.npz filter=lfs diff=lfs merge=lfs -text
-data/anita/anita_generic_parameterization_180-1200MHz.npz filter=lfs diff=lfs merge=lfs -text
-*.root filter=lfs diff=lfs merge=lfs -text

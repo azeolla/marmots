@@ -412,13 +412,15 @@ def geomag(
 
     station = coordinates.EarthLocation(station[0], station[1], station[2])
 
-    #devnull = open('/dev/null', 'w')
-    #oldstdout_fno = os.dup(sys.stdout.fileno())
-    #os.dup2(devnull.fileno(), 1)
+    with open('/dev/null', 'w') as devnull:
+        oldstdout_fno = os.dup(sys.stdout.fileno())
+        os.dup2(devnull.fileno(), 1)
 
-    geomag = igrf('2022-10-12', glat=station.lat.value, glon=station.lon.value, alt_km=station.height.value)
+        geomag = igrf('2022-10-12', glat=station.lat.value, glon=station.lon.value, alt_km=station.height.value)
 
-    #os.dup2(oldstdout_fno, 1)
+        os.dup2(oldstdout_fno, 1)
+        
+        os.close(oldstdout_fno)
 
     mag = geomag.total.values[0]
     B = np.array([geomag.east.values, geomag.north.values, -geomag.down.values]).T

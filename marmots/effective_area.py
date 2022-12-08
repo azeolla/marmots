@@ -16,7 +16,6 @@ import marmots.geometry as geometry
 import marmots.tauola as tauola
 from marmots.efield import EFieldParam
 from marmots.tauexit import TauExitLUT
-import time
 
 
 def calculate(
@@ -64,8 +63,6 @@ def calculate(
         A collection of effective area components across elevation.
     """
     
-    start = time.time()
-
     # load the corresponding tau exit LUT
     tauexit = TauExitLUT(energy=Enu, thickness=0)
 
@@ -183,12 +180,10 @@ def calculate(
         Pdet = np.sum(Ptrig, axis=0) > 0
 
         # and save the various effective area coefficients at these angles
-        geometric = (Ag.area * np.sum(Ag.dot)) / N
+        geometric = (Ag.area * np.sum(Ag.dot)) / (N * Ag.stations.shape[0])
         pexit = np.mean(Pexit)
         pdet = np.mean(Pdet)
-        effective_area = np.sum(Ag.area * Ag.dot * Pexit * Pdet) / N
+        effective_area = np.sum(Ag.area * Ag.dot * Pexit * Pdet) / (N * Ag.stations.shape[0])
 
     # and now return the computed parameters
-    #return np.array([geometric, pexit, pdet, effective_area])
-    end = time.time()
-    return end-start
+    return np.array([geometric, pexit, pdet, effective_area])
