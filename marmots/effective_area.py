@@ -16,6 +16,7 @@ import marmots.geometry as geometry
 import marmots.tauola as tauola
 from marmots.efield import EFieldParam
 from marmots.tauexit import TauExitLUT
+#import time
 
 
 def calculate(
@@ -62,6 +63,8 @@ def calculate(
     Aeff: EffectiveArea
         A collection of effective area components across elevation.
     """
+
+    #begin = time.time()
     
     # load the corresponding tau exit LUT
     tauexit = TauExitLUT(energy=Enu, thickness=0)
@@ -104,13 +107,17 @@ def calculate(
 
         Ptrig = np.zeros((Ag.stations.shape[0], Ag.trials.shape[0]))
 
+        ground_view = geometry.view_angle(Ag.trials, Ag.stations, Ag.axis)
+
         # iterate over stations
         for i in range(Ag.stations.shape[0]):
 
-            distance_to_decay = np.linalg.norm(Ag.stations[i] - decay_point, axis=1)
+            in_sight = ground_view[i] <= 3*u.deg
+
+            distance_to_decay = np.linalg.norm(Ag.stations[i] - decay_point[in_sight], axis=1)
 
             # calculate the view angle from the decay points
-            view = geometry.decay_view(decay_point, Ag.axis, Ag.stations[i])
+            decay_view = geometry.decay_view(decay_point[in_sight], Ag.axis, Ag.stations[i])
 
             altitudes = np.array([0.5, 1.0, 2.0, 3.0, 4.0])
             detector_altitude = np.linalg.norm(Ag.stations[i]) - Re
@@ -120,23 +127,23 @@ def calculate(
             voltage = EFieldParam(closest_altitude)
 
             # the zenith and azimuth (measured from East to North) from the station to each decay point
-            theta, phi = geometry.obs_zenith_azimuth(Ag.stations[i], decay_point)
+            theta, phi = geometry.obs_zenith_azimuth(Ag.stations[i], decay_point[in_sight])
 
             phi_from_boresight = phi - Ag.orientations[i]
 
             # compute the voltage at each of these off-axis angles and at each frequency
             V = voltage(
-                view.to(u.deg),
-                exit_zenith.to(u.deg),
-                decay_altitude,
-                decay_length,
-                decay_zenith.to(u.deg),
-                decay_azimuth.to(u.deg),
+                decay_view.to(u.deg),
+                exit_zenith[in_sight].to(u.deg),
+                decay_altitude[in_sight],
+                decay_length[in_sight],
+                decay_zenith[in_sight].to(u.deg),
+                decay_azimuth[in_sight].to(u.deg),
                 distance_to_decay,
                 Ag.stations[i],
-                Ag.dbeacon[i],
+                Ag.dbeacon[i][in_sight],
                 freqs,
-                Eshower,
+                Eshower[in_sight],
                 antennas,
                 theta.to(u.deg),
                 phi_from_boresight.to(u.deg),
@@ -148,7 +155,7 @@ def calculate(
             SNR = np.sum(V, axis=1) / vrms
 
             # and check for a trigger
-            Ptrig[i] = SNR > trigger_SNR
+            Ptrig[i][in_sight] = SNR > trigger_SNR
 
             # and use this to compute the angle below ANITA's horizontal
             elev = (np.pi / 2.0)*u.rad - theta
@@ -171,11 +178,11 @@ def calculate(
             del beyond, below
 
             # if the trial is invisible, there's no way we can trigger on it
-            Ptrig[i][invisible] = 0.0
+            Ptrig[i][in_sight][invisible] = 0.0
 
             # if the event is above ANITA's horizon, we would not find
             # them in the search as they would be treated as background
-            Ptrig[i][elev > 0.0] = 0.0
+            Ptrig[i][in_sight][elev > 0.0] = 0.0
 
         Pdet = np.sum(Ptrig, axis=0) > 0
 
@@ -185,5 +192,6 @@ def calculate(
         pdet = np.mean(Pdet)
         effective_area = np.sum(Ag.area * Ag.dot * Pexit * Pdet) / (N * Ag.stations.shape[0])
 
+    #end = time.time()
     # and now return the computed parameters
     return np.array([geometric, pexit, pdet, effective_area])
