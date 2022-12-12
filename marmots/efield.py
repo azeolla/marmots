@@ -90,10 +90,7 @@ class EFieldParam(object):
         
         outside_fov = ((phi < -FoV/2) | (phi > FoV/2))
         
-        outside_view = view > 5*u.deg
-        
         cut = np.logical_or(too_far, outside_fov)
-        cut = np.logical_or(cut, outside_view)
 
         view = view[~cut]
         exit_zenith = exit_zenith[~cut]
@@ -412,6 +409,7 @@ def geomag(
 
     station = coordinates.EarthLocation(station[0], station[1], station[2])
 
+    '''
     with open('/dev/null', 'w') as devnull:
         oldstdout_fno = os.dup(sys.stdout.fileno())
         os.dup2(devnull.fileno(), 1)
@@ -421,6 +419,8 @@ def geomag(
         os.dup2(oldstdout_fno, 1)
         
         os.close(oldstdout_fno)
+    '''
+    geomag = igrf('2022-10-12', glat=station.lat.value, glon=station.lon.value, alt_km=station.height.value)
 
     mag = geomag.total.values[0]
     B = np.array([geomag.east.values, geomag.north.values, -geomag.down.values]).T

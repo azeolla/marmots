@@ -104,7 +104,7 @@ def geometric_area(
     else:
 
         # compute the view angle of each of these points
-        view = view_angle(trials, stations, axis, N)
+        view = view_angle(trials, stations, axis)
 
         # find all the points that pass the view angle cut
         trials = trials[view < maxview]
@@ -146,7 +146,7 @@ def decay_view(
     return np.arccos(np.dot(d/np.linalg.norm(d, axis=1)[:,None], axis)) 
 
 
-def view_angle(point: np.ndarray, obspoint: np.ndarray, axis: np.ndarray, N: int) -> np.ndarray:
+def view_angle(point: np.ndarray, obspoint: np.ndarray, axis: np.ndarray) -> np.ndarray:
     """
     Given the height of the observer (in km), the location of the observation
     point `point` in geocentric coordinates, and the particle `axis`, calculate
