@@ -88,6 +88,8 @@ import numpy as np
 import astropy.units as u
 import astropy.coordinates as coordinates
 import marmots.effective_area as effective_area
+from marmots.tauexit import TauExitLUT
+from marmots.efield import EFieldParam
 import matplotlib.pyplot as plt
 from astropy.time import Time
 
@@ -120,6 +122,13 @@ time = Time('2022-7-18 12:00:00') - 4*u.hour
 
 freqs = np.arange(args.bandwidth[0], args.bandwidth[1], 10)+5
 
+# load the corresponding tau exit LUT
+Enu = args.Enu * 1e18
+tauexit = TauExitLUT(energy=Enu, thickness=0)
+
+# load the field parameterization.
+voltage = EFieldParam()
+
 def pix_loop(i):
     source = coordinates.SkyCoord(ra=ra[i], dec=dec[i], frame='icrs')
     altaz = source.transform_to(coordinates.AltAz(obstime=time,location=beacon))
@@ -129,12 +138,13 @@ def pix_loop(i):
 
     # calculate the effective area
     results = effective_area.calculate(
-        args.Enu * 1e18,
         geo,
         altaz,
         beacon,
         orientations,
         fov,
+        tauexit,
+        voltage,
         np.radians(args.max_view)*u.rad,
         args.ntrials,
         args.antennas,

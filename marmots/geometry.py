@@ -48,7 +48,6 @@ GeometricArea = NamedTuple(
     ],
 )
 
-
 def geometric_area(
     beacon: coordinates.EarthLocation,
     source: coordinates.SkyCoord,
@@ -328,6 +327,7 @@ def cartesian_to_spherical(point):
     spherical[:,2] = np.arctan2(point[:,1], point[:,0])*u.rad
 
     return spherical
+
 
 def spherical_segment_area(
     theta_min: np.ndarray,
@@ -743,6 +743,7 @@ def decay_altitude(
 
     return altitude
 
+
 def obs_zenith_azimuth(
     station: np.ndarray, decay_point: np.ndarray) -> np.ndarray:
     """
@@ -777,6 +778,7 @@ def obs_zenith_azimuth(
     phi = rthetaphi[:,2]*u.rad
 
     return theta, phi 
+
 
 def distance_to_horizon(height: np.ndarray, radius: float = Re) -> np.ndarray:
     """
