@@ -20,12 +20,13 @@ from marmots.tauexit import TauExitLUT
 
 
 def calculate(
-    Enu: float,
     source: coordinates.SkyCoord,
     altaz: Any,
     beacon: coordinates.EarthLocation,
     orientations: np.ndarray,
     fov: np.ndarray,
+    tauexit,
+    voltage,
     maxview: float = np.radians(3.0),
     N: Union[np.ndarray, int] = 1_000_000,
     antennas: int = 4,
@@ -65,9 +66,6 @@ def calculate(
     """
 
     #begin = time.time()
-    
-    # load the corresponding tau exit LUT
-    tauexit = TauExitLUT(energy=Enu, thickness=0)
 
     # compute the geometric area at the desired elevation angles
     Ag = geometry.geometric_area(
@@ -112,19 +110,12 @@ def calculate(
         # iterate over stations
         for i in range(Ag.stations.shape[0]):
 
-            in_sight = ground_view[i] <= 3*u.deg
+            in_sight = ground_view[i] <= maxview
 
             distance_to_decay = np.linalg.norm(Ag.stations[i] - decay_point[in_sight], axis=1)
 
             # calculate the view angle from the decay points
             decay_view = geometry.decay_view(decay_point[in_sight], Ag.axis, Ag.stations[i])
-
-            altitudes = np.array([0.5, 1.0, 2.0, 3.0, 4.0])
-            detector_altitude = np.linalg.norm(Ag.stations[i]) - Re
-            closest_altitude = altitudes[np.abs(altitudes - detector_altitude.value).argmin()]
-
-            # load the field parameterization.
-            voltage = EFieldParam(closest_altitude)
 
             # the zenith and azimuth (measured from East to North) from the station to each decay point
             theta, phi = geometry.obs_zenith_azimuth(Ag.stations[i], decay_point[in_sight])
@@ -159,6 +150,8 @@ def calculate(
 
             # and use this to compute the angle below ANITA's horizontal
             elev = (np.pi / 2.0)*u.rad - theta
+
+            detector_altitude = np.linalg.norm(Ag.stations[i]) - Re
 
             # calculate the distance (km) to the horizon from ANITA
             horizon_distance = geometry.distance_to_horizon(
@@ -195,3 +188,4 @@ def calculate(
     #end = time.time()
     # and now return the computed parameters
     return np.array([geometric, pexit, pdet, effective_area])
+    #return end - begin
