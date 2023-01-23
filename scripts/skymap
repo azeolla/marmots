@@ -85,13 +85,10 @@ if __name__ == "__main__":
 import healpy as hp
 from p_tqdm import p_map
 import numpy as np
-import astropy.units as u
-import astropy.coordinates as coordinates
 import marmots.effective_area as effective_area
 from marmots.tauexit import TauExitLUT
 from marmots.efield import EFieldParam
 import matplotlib.pyplot as plt
-from astropy.time import Time
 
 
 # the number of pixels in the healpy skymap, determined by nside
@@ -100,25 +97,22 @@ npix = hp.nside2npix(args.nside)
 # the location of each pixel
 theta, phi = np.degrees(hp.pix2ang(nside=args.nside, ipix = np.arange(npix)))
 
-dec = (90 - theta)*u.deg
-ra = phi*u.deg
+dec = (90 - theta)
+ra = phi
 
 stations = np.loadtxt(args.stations).T
 
-lat = stations[0]*u.deg
-lon = stations[1]*u.deg
-altitude = stations[2]*u.km
-orientations = stations[3]*u.deg
-fov = stations[4]*u.deg
+lat = stations[0]
+lon = stations[1]
+altitude = stations[2]
+orientations = stations[3]
+fov = stations[4]
 
-# the location of the BEACON stations
-beacon = coordinates.EarthLocation(
-    lat=lat,
-    lon=lon,
-    height=altitude,
-)
-
-time = Time('2022-7-18 12:00:00') - 4*u.hour
+lat = np.atleast_1d(lat)
+lon = np.atleast_1d(lon)
+altitude = np.atleast_1d(altitude)
+orientations = np.atleast_1d(orientations)
+fov = np.atleast_1d(fov)
 
 freqs = np.arange(args.bandwidth[0], args.bandwidth[1], 10)+5
 
@@ -130,22 +124,18 @@ tauexit = TauExitLUT(energy=Enu, thickness=0)
 voltage = EFieldParam()
 
 def pix_loop(i):
-    source = coordinates.SkyCoord(ra=ra[i], dec=dec[i], frame='icrs')
-    altaz = source.transform_to(coordinates.AltAz(obstime=time,location=beacon))
-
-    geo = source.transform_to(coordinates.ITRS(obstime=time))
-    geo.representation_type = 'spherical'
-
     # calculate the effective area
     results = effective_area.calculate(
-        geo,
-        altaz,
-        beacon,
+        ra[i],
+        dec[i],
+        lat,
+        lon, 
+        altitude,
         orientations,
         fov,
         tauexit,
         voltage,
-        np.radians(args.max_view)*u.rad,
+        np.radians(args.max_view),
         args.ntrials,
         args.antennas,
         freqs,
