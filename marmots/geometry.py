@@ -49,9 +49,11 @@ GeometricArea = NamedTuple(
 )
 
 def geometric_area(
-    beacon: coordinates.EarthLocation,
-    source: coordinates.SkyCoord,
-    altaz: Any,
+    ra_deg: float,
+    dec_deg: float,
+    lat_deg: np.ndarray,
+    lon_deg: np.ndarray, 
+    height: np.ndarray,
     maxview: float,
     orientations: np.ndarray,
     fov: np.ndarray,
@@ -87,14 +89,22 @@ def geometric_area(
         The detected view angles for each trial (view)
     """
 
-    theta = (90*u.deg - source.lat).to(u.rad)
-    phi = source.lon.to(u.rad)
+    ra = np.deg2rad(ra_deg)
+    dec = np.deg2rad(dec_deg)
+    lat = np.deg2rad(lat_deg)
+    lon = np.deg2rad(lon_deg)
+
+    alt = altitude(ra, dec, lat, lon)
+    az = azimuth(ra, dec, lat, lon)
+
+    theta = np.pi/2 - dec
+    phi = ra
 
     # the particle axis
     axis = -spherical_to_cartesian(theta, phi, r=1.0)[0]
 
     # generate N random points in the corresponding segment
-    trials, A0, stations, orientations, fov = points_on_earth(beacon, altaz, maxview, orientations, fov, N)
+    trials, A0, stations, orientations, fov = points_on_earth(lat, lon, height, alt, az, maxview, orientations, fov, N)
 
     if (trials.size == 0):
 
@@ -103,7 +113,7 @@ def geometric_area(
     else:
 
         # compute the view angle of each of these points
-        view = view_angle(trials, stations, axis)
+        view = view_angle(trials, stations["geocentric"], axis)
 
         # find all the points that pass the view angle cut
         trials = trials[view < maxview]
@@ -121,10 +131,10 @@ def geometric_area(
         view = view[view < maxview][valid]
 
         # compute the average emergence angle for this elevation
-        emergence = np.pi/2.0*u.rad - np.arccos(dot) if dot.size else np.asarray([])
+        emergence = np.pi/2.0 - np.arccos(dot) if dot.size else np.asarray([])
 
         # the vector from each exit point to each station
-        to_beacon = (stations[:,None] - trials[valid])
+        to_beacon = (stations["geocentric"][:,None] - trials[valid])
 
         # get the distance from the exit point to BEACON
         dbeacon = np.linalg.norm(to_beacon, axis=2)
@@ -134,6 +144,16 @@ def geometric_area(
 
         # and we are done
         return GeometricArea(A0, dot, emergence, view, dbeacon, stations, trials[valid], axis, to_beacon, orientations, fov)
+
+
+def altitude(ra, dec, lat, lon):
+    alt = np.arcsin( np.sin(dec)*np.sin(lat) + np.cos(dec)*np.cos(lat)*np.cos(lon-ra) )
+    return alt
+
+
+def azimuth(ra, dec, lat, lon):
+    az = np.arctan2(np.sin(lon-ra)  , (np.cos(lon-ra)*np.sin(lat) - np.tan(dec)*np.cos(lat)))
+    return az + np.pi
 
 
 def decay_view(
@@ -180,12 +200,15 @@ def view_angle(point: np.ndarray, obspoint: np.ndarray, axis: np.ndarray) -> np.
     axis = axis / np.linalg.norm(axis)
 
     # and compute the view angle and we are done
-    return np.arccos(np.dot(view, axis)).to(u.deg)
+    return np.arccos(np.dot(view, axis))
 
 
 def points_on_earth(
-    beacon: coordinates.EarthLocation,
-    altaz: Any,
+    lat: np.ndarray, 
+    lon: np.ndarray, 
+    height: np.ndarray, 
+    alt: np.ndarray,  
+    az: np.ndarray, 
     view: float,
     orientations: np.ndarray,
     fov: np.ndarray,
@@ -218,11 +241,11 @@ def points_on_earth(
         The trapezoidal surface area sampled from (in km^2).
     """
 
-    minview = altaz.alt.to(u.rad) + view
-    maxview = altaz.alt.to(u.rad) - view
+    minview = alt + view
+    maxview = alt - view
 
     # angle to the horizon
-    horizon = horizon_angle(beacon.height.to(u.km), radius=Re)
+    horizon = horizon_angle(height, radius=Re)
 
     # if minview is above the horizon, it should be set to the horizon
     minview[minview > horizon] = horizon[minview > horizon]
@@ -231,24 +254,24 @@ def points_on_earth(
     minview[maxview > horizon] = np.nan
     maxview[maxview > horizon] = np.nan
 
-    minaz = altaz.az.to(u.rad) - view
-    maxaz = altaz.az.to(u.rad) + view
+    minaz = az - view
+    maxaz = az + view
 
     # if we're looking closing to straight down then maxview will be greater than 90 deg.
     
-    maxview[maxview < -np.pi/2*u.rad] = -np.pi/2*u.rad
+    maxview[maxview < -np.pi/2] = -np.pi/2
 
     # find the indices in which the Earth is not in sight
     invalid = (np.isnan(minview) | np.isnan(maxview))
 
-    if (np.sum(invalid) == beacon.size):
+    if (np.sum(invalid) == lat.size):
         rtrials = np.array([])
         A0 = 0 
         stations = np.array([])
     else:
         # get the geocentric angle formed by these view angles
-        theta_min = geocentric_angle(beacon.height[~invalid], maxview[~invalid], radius=Re)
-        theta_max = geocentric_angle(beacon.height[~invalid], minview[~invalid], radius=Re)
+        theta_min = geocentric_angle(height[~invalid], maxview[~invalid], radius=Re)
+        theta_max = geocentric_angle(height[~invalid], minview[~invalid], radius=Re)
         phi_min = -minaz[~invalid] # negative sign to account for azimuth being positive towards the East
         phi_max = -maxaz[~invalid]
 
@@ -270,35 +293,37 @@ def points_on_earth(
 
         points = np.array(list(zip(point1 , point2, point3, point4)))
 
-        station_theta = (90*u.deg - beacon.lat[~invalid]).to(u.rad)
-        station_phi = beacon.lon[~invalid].to(u.rad)
-        station_height = beacon.height[~invalid].to(u.km)
+        station_theta = np.pi/2 - lat[~invalid]
+        station_phi = lon[~invalid]
+        station_height = height[~invalid]
 
         # rotate the area vertices to their appropriate place on Earth
         rotated = np.array(list(map(rotate_earth, points, station_theta, station_phi)))
 
         # rotate the trial points to their appropriate place on Earth
-        rtrials = np.array(list(map(rotate_earth, trials, station_theta, station_phi)))*u.km
+        rtrials = np.array(list(map(rotate_earth, trials, station_theta, station_phi)))
 
         # convert the vertices back to spherical
-        rthetaphi = np.array(list(map(cartesian_to_spherical, rotated*u.km)))*u.rad
+        rthetaphi = np.array(list(map(cartesian_to_spherical, rotated)))
 
         # find the vertices in which some have negative phi and some have postive phi (the shape passes over the prime or anti meridian)
-        sum = (np.sum(rthetaphi[:,:,2] > 0*u.rad, axis=1))
+        sum = (np.sum(rthetaphi[:,:,2] > 0, axis=1))
         # the shapes wrap correctly over the prime meridian (phi = 0), but mess up at the antimeridian (phi = pi)
-        wrapped_over_antimeridian = rthetaphi[(sum != 0) & (sum != 4) & (np.mean(abs(rthetaphi[:,:,2]), axis=1) > np.pi/2*u.rad)]
+        wrapped_over_antimeridian = rthetaphi[(sum != 0) & (sum != 4) & (np.mean(abs(rthetaphi[:,:,2]), axis=1) > np.pi/2)]
         negative_phi = wrapped_over_antimeridian[:,:,2] < 0
-        wrapped_over_antimeridian[:,:,2][negative_phi] += 2*np.pi*u.rad # add 2pi to the negative phi values
-        rthetaphi[(sum != 0) & (sum != 4) & (np.mean(abs(rthetaphi[:,:,2]), axis=1) > np.pi/2*u.rad)] = wrapped_over_antimeridian
+        wrapped_over_antimeridian[:,:,2][negative_phi] += 2*np.pi # add 2pi to the negative phi values
+        rthetaphi[(sum != 0) & (sum != 4) & (np.mean(abs(rthetaphi[:,:,2]), axis=1) > np.pi/2)] = wrapped_over_antimeridian
 
         # perform a sinuisodal projection on the vertices 
-        projection = np.swapaxes(np.array(list(map(project, rthetaphi[:,:,0], 90*u.deg - rthetaphi[:,:,1].to(u.deg), rthetaphi[:,:,2].to(u.deg)))), 1, 2)
+        projection = np.swapaxes(np.array(list(map(project, rthetaphi[:,:,0], 90 - np.rad2deg(rthetaphi[:,:,1]), np.rad2deg(rthetaphi[:,:,2])))), 1, 2)
 
         # and get the total geometric area
         A0 = union_area(projection)
 
         # the cartesian coordinates of the stations with land in view
         stations = spherical_to_cartesian(station_theta, station_phi, Re+station_height)
+        stations = {"geocentric": spherical_to_cartesian(station_theta, station_phi, Re+station_height), 
+                    "geodetic": np.array([np.rad2deg(lat[~invalid]), np.rad2deg(lon[~invalid]), height[~invalid]]).T}
         orientations = orientations[~invalid]
         fov = fov[~invalid]
 
@@ -309,7 +334,7 @@ def points_on_earth(
 def rotate_earth(point, theta, phi):
 
     theta = -theta
-    phi += np.pi*u.rad
+    phi += np.pi
 
     Ry = np.array([[np.cos(theta), 0, np.sin(theta)], [0, 1, 0], [-np.sin(theta), 0, np.cos(theta)]])
 
@@ -322,9 +347,9 @@ def cartesian_to_spherical(point):
 
     spherical = np.zeros((point.shape[0], 3))
 
-    spherical[:,0] = np.linalg.norm(point, axis=1)*u.km
-    spherical[:,1] = np.arccos(point[:,2]/np.linalg.norm(point, axis=1))*u.rad
-    spherical[:,2] = np.arctan2(point[:,1], point[:,0])*u.rad
+    spherical[:,0] = np.linalg.norm(point, axis=1)
+    spherical[:,1] = np.arccos(point[:,2]/np.linalg.norm(point, axis=1))
+    spherical[:,2] = np.arctan2(point[:,1], point[:,0])
 
     return spherical
 
@@ -371,8 +396,8 @@ def spherical_segment_area(
 def project(radius, latitude, longitude):
     lat_dist = np.pi * radius / 180
     y = latitude * lat_dist 
-    x = longitude * lat_dist * np.cos(latitude.to(u.rad))
-    return x.value, y.value
+    x = longitude * lat_dist * np.cos(np.deg2rad(latitude))
+    return x, y
 
 
 def union_area(
@@ -382,8 +407,8 @@ def union_area(
     polygon = unary_union([Polygon(x) for x in points.tolist()])
 
     # define the the boundary of the sinusoidal projection (the antimeridian)
-    left_bound = project(Re, np.arange(-90, 91,1)*u.deg, -180*u.deg)
-    right_bound = project(Re, np.arange(-90, 91,1)*u.deg, 180*u.deg)
+    left_bound = project(Re, np.arange(-90, 91,1), -180)
+    right_bound = project(Re, np.arange(-90, 91,1), 180)
     a = np.array([left_bound[0], left_bound[1]]).T
     b = np.flip(np.array([right_bound[0], right_bound[1]]).T, axis=0)
     ring = LineString(np.array([a,b]).reshape(2*181,2))
@@ -406,10 +431,10 @@ def union_area(
 
 
 def translate(x,y):
-    lat_dist = np.pi * Re.value / 180
-    lat = (y/lat_dist)*u.deg
-    lon = (x/(lat_dist * np.cos(lat.to(u.rad))))*u.deg
-    new_lon = remainder(lon.value, 360)*u.deg
+    lat_dist = np.pi * Re / 180
+    lat = (y/lat_dist)
+    lon = (x/(lat_dist * np.cos(np.deg2rad(lat))))
+    new_lon = remainder(lon, 360)
     new_x, new_y = project(Re, lat, new_lon)
     return tuple([new_x, new_y])
 
@@ -479,7 +504,7 @@ def geocentric_angle(
     earth_angle[elev == horizon] = -horizon[elev == horizon]
 
     # compute the 'theta' in the reference
-    theta = (np.pi/2.0)*u.rad + elev
+    theta = (np.pi/2.0) + elev
 
     # compute sin(phi)
     sphi = ((radius + height) / radius) * np.sin(theta)
@@ -626,7 +651,7 @@ def random_surface_point(
          phi_max.repeat(N).reshape(phi_max.size, N))))
 
     # and convert this spherical point into cartesian coordinates
-    return np.array(list(map(spherical_to_cartesian, theta, phi, radius.repeat(theta.size))))
+    return np.array(list(map(spherical_to_cartesian, theta, phi, np.repeat(radius, theta.size))))
 
 
 def spherical_to_cartesian(
@@ -667,7 +692,7 @@ def spherical_to_cartesian(
     return r[:, None] * cartesian
 
 
-def decay_zenith_azimuth(decay_point: np.ndarray, axis: np.ndarray) -> np.ndarray:
+def decay_zenith_azimuth(decay_point: np.ndarray, axis: np.ndarray, decay_point_spherical: np.ndarray, axis_spherical: np.ndarray) -> np.ndarray:
     """
     Returns the zenith angle and azimuth angle (measured from East to North) of a shower as measured at the decay point
 
@@ -687,19 +712,16 @@ def decay_zenith_azimuth(decay_point: np.ndarray, axis: np.ndarray) -> np.ndarra
         The azimuth angle (measured from East to North) of each shower relative to the decay point (rad).
     """
 
-    axis = coordinates.EarthLocation(x=decay_point[:,0]+axis[0], y=decay_point[:,1]+axis[1], z=decay_point[:,2]+axis[2])
-    decay_point = coordinates.EarthLocation(x=decay_point[:,0], y=decay_point[:,1], z=decay_point[:,2])
+    dot1 = np.dot(decay_point/np.linalg.norm(decay_point, axis=1)[:,None], axis)
+    zenith = np.arccos(dot1)
     
-    enu = pm.geodetic2enu(axis.lat.value, axis.lon.value, axis.height.to(u.m).value, lat0=decay_point.lat.value, lon0=decay_point.lon.value, h0=decay_point.height.to(u.m).value)
+    y = np.sin(decay_point_spherical[:,2] - axis_spherical[:,2]) * np.cos(np.pi/2 - axis_spherical[:,1])
+    x = np.cos(np.pi/2 - decay_point_spherical[:,1]) * np.sin(np.pi/2 - axis_spherical[:,1]) - np.sin(np.pi/2 - decay_point_spherical[:,1]) * np.cos(np.pi/2 - axis_spherical[:,1]) * np.cos(decay_point_spherical[:,2] - axis_spherical[:,2])
+    a = np.arctan2(y,x)
+    
+    azimuth = a + np.pi/2
 
-    enu = np.array(enu).T
-
-    rthetaphi = cartesian_to_spherical(np.array(enu))
-
-    theta = rthetaphi[:,1]*u.rad
-    phi = rthetaphi[:,2]*u.rad
-
-    return theta, phi
+    return zenith, azimuth
 
 
 def decay_altitude(
@@ -745,7 +767,7 @@ def decay_altitude(
 
 
 def obs_zenith_azimuth(
-    station: np.ndarray, decay_point: np.ndarray) -> np.ndarray:
+    station: np.ndarray, decay_point: np.ndarray, geodetic: np.ndarray, decay_point_spherical: np.ndarray) -> np.ndarray:
     """
     Returns the zenith angle and azimuth angle (measured from East to North) at which the decay points are located relative to the station.
 
@@ -765,19 +787,22 @@ def obs_zenith_azimuth(
         The azimuth angle (measured from East to North) of each decay point relative to the station (rad).
     """
 
-    station = coordinates.EarthLocation(x=station[0], y=station[1], z=station[2])
-    decay_point = coordinates.EarthLocation(x=decay_point[:,0], y=decay_point[:,1], z=decay_point[:,2])
+    decay_vector = decay_point - station
+    decay_vector = decay_vector/np.linalg.norm(decay_vector, axis=1)[:,None]
 
-    enu = pm.geodetic2enu(decay_point.lat.value, decay_point.lon.value, decay_point.height.to(u.m).value, lat0=station.lat.value, lon0=station.lon.value, h0=station.height.to(u.m).value)
+    dot1 = np.dot(decay_vector, station/np.linalg.norm(station))
+    zenith = np.arccos(dot1)
 
-    enu = np.array(enu).T
+    lat = np.deg2rad(geodetic[0])
+    lon = np.deg2rad(geodetic[1])
+    
+    y = np.sin(lon - decay_point_spherical[:,2]) * np.cos(np.pi/2 - decay_point_spherical[:,1])
+    x = np.cos(lat) * np.sin(np.pi/2 - decay_point_spherical[:,1]) - np.sin(lat) * np.cos(np.pi/2 - decay_point_spherical[:,1]) * np.cos(lon - decay_point_spherical[:,2])
+    a = np.arctan2(y,x)
+    
+    azimuth = a + np.pi/2
 
-    rthetaphi = cartesian_to_spherical(np.array(enu))
-
-    theta = rthetaphi[:,1]*u.rad
-    phi = rthetaphi[:,2]*u.rad
-
-    return theta, phi 
+    return zenith, azimuth
 
 
 def distance_to_horizon(height: np.ndarray, radius: float = Re) -> np.ndarray:

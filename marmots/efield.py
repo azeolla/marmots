@@ -10,8 +10,6 @@ from interpolation.splines import CGrid, eval_linear
 from numba import njit
 from scipy.interpolate import interpn
 from igrf12 import igrf
-import astropy.coordinates as coordinates
-import astropy.units as u
 
 import marmots.antenna as antenna
 from marmots import data_directory
@@ -39,7 +37,8 @@ class EFieldParam():
         decay_zenith: np.ndarray,
         decay_azimuth: np.ndarray,
         distance_to_decay: np.ndarray,
-        beacon: np.ndarray,
+        detector_altitude: float,
+        beacon: dict,
         dbeacon: np.ndarray,
         freqs: np.ndarray,
         shower_energy: np.ndarray,
@@ -101,8 +100,7 @@ class EFieldParam():
         phi = phi[~cut]
         distance_decay_km = distance_to_decay[~cut]
 
-        detector_altitude = np.linalg.norm(beacon) - Re
-        alt_idx = np.abs(self.altitudes - detector_altitude.value).argmin()
+        alt_idx = np.abs(self.altitudes - detector_altitude).argmin()
         
         
 
@@ -110,43 +108,43 @@ class EFieldParam():
         sim_distance_decay_km = interpn(
             (self.zenith_list[alt_idx], self.decay_list[alt_idx], self.view_list[alt_idx]),
             self.Dsim[alt_idx],
-            (exit_zenith.value, decay_altitude.value, view.value),
+            (exit_zenith, decay_altitude, view),
             bounds_error=False,
             fill_value=None,
-        )*u.km
+        )
 
         sim_sinVB = interpn(
             (self.zenith_list[alt_idx], self.decay_list[alt_idx]),
             self.sim_sinVB[alt_idx],
-            (exit_zenith.value, decay_altitude.value),
+            (exit_zenith, decay_altitude),
             bounds_error=False,
             fill_value=None,
         )
         
         mag, sinVB = geomag(beacon, decay_zenith, decay_azimuth)
 
-        efields = eval(self.grid[alt_idx], self.values[alt_idx], freqs, decay_altitude.value, exit_zenith.value, view.value).T
+        efields = eval(self.grid[alt_idx], self.values[alt_idx], freqs, decay_altitude, exit_zenith, view).T
 
         # calculate the voltage at each frequency
         voltage[~cut] = antenna.voltage_from_field(
             efields,
             freqs,
             antennas,
-            theta.value,
-            phi.value,
+            theta,
+            phi,
         )
 
         # account for ZHAIReS sims only extending to 3.16 deg in view angle
         view_factor = np.ones(voltage[~cut].shape[0])
 
-        view_factor[view.value > 3.16] = np.exp(
-                    -(view.value[view.value > 3.16]**2) / (2 * 3.16)**2
+        view_factor[view > 3.16] = np.exp(
+                    -(view[view > 3.16]**2) / (2 * 3.16)**2
                 )
 
         voltage[~cut] *= view_factor[:,None]
 
         # distance correction (ZHAireS distance over Poinsseta distance)
-        voltage[~cut] *= (sim_distance_decay_km / distance_decay_km).value[:,None]
+        voltage[~cut] *= (sim_distance_decay_km / distance_decay_km)[:,None]
 
         # energy scaling
         voltage[~cut] *= (shower_energy / self.sim_energy)[:,None]
@@ -300,8 +298,8 @@ def get_X0(
         The zenith angle in degrees.
     """
     a = 1.0
-    b = 2.0 * np.cos(np.deg2rad(zenith)) * (Re.value + ice)
-    c = (Re.value + ice) ** 2 - (Re.value + ice + decay_altitude) ** 2
+    b = 2.0 * np.cos(np.deg2rad(zenith)) * (Re + ice)
+    c = (Re + ice) ** 2 - (Re + ice + decay_altitude) ** 2
     X0 = (-b + np.sqrt(b ** 2 - 4 * a * c)) / (2 * a)
     return X0
 
@@ -324,8 +322,8 @@ def get_decay_zenith_angle(
 
     # get the quantities for the cosine rule
     A = X0
-    B = Re.value + ice + decay_altitude
-    C = Re.value + ice
+    B = Re + ice + decay_altitude
+    C = Re + ice
 
     # construct cosz
     cosz = (A ** 2 + B ** 2 - C ** 2) / (2 * A * B)
@@ -356,8 +354,8 @@ def get_distance_decay_to_detector(
         The thickness of the ice (km).
     """
     a = 1
-    b = 2 * np.cos(np.deg2rad(zenith_decay)) * (Re.value + ice + decay_altitude)
-    c = (Re.value + ice + decay_altitude) ** 2 - (Re.value + detector_altitude) ** 2
+    b = 2 * np.cos(np.deg2rad(zenith_decay)) * (Re + ice + decay_altitude)
+    c = (Re + ice + decay_altitude) ** 2 - (Re + detector_altitude) ** 2
     d = (-b + np.sqrt(b ** 2 - 4 * a * c)) / (2 * a)
 
     dist = d/np.cos(np.deg2rad(view))
@@ -425,26 +423,21 @@ def geomag(
     station: np.ndarray, zenith: np.ndarray, azimuth: np.ndarray
 ) -> np.ndarray:
 
-    station = coordinates.EarthLocation(station[0], station[1], station[2])
-
-    '''
     with open('/dev/null', 'w') as devnull:
         oldstdout_fno = os.dup(sys.stdout.fileno())
         os.dup2(devnull.fileno(), 1)
 
-        geomag = igrf('2022-10-12', glat=station.lat.value, glon=station.lon.value, alt_km=station.height.value)
+        geomag = igrf('2022-10-12', glat=station[0], glon=station[1], alt_km=station[2])
 
         os.dup2(oldstdout_fno, 1)
         
         os.close(oldstdout_fno)
     
-    '''
-    geomag = igrf('2022-10-12', glat=station.lat.value, glon=station.lon.value, alt_km=station.height.value)
+    #geomag = igrf('2022-10-12', glat=station.lat.value, glon=station.lon.value, alt_km=station.height.value)
     
-
     mag = geomag.total.values[0]
     B = np.array([geomag.east.values, geomag.north.values, -geomag.down.values]).T
-    V = np.array([np.sin(zenith.to(u.rad))*np.cos(azimuth.to(u.rad)), np.sin(zenith.to(u.rad))*np.sin(azimuth.to(u.rad)), np.cos(zenith.to(u.rad))]).T
+    V = np.array([np.sin(np.deg2rad(zenith))*np.cos(np.deg2rad(azimuth)), np.sin(np.deg2rad(zenith))*np.sin(np.deg2rad(azimuth)), np.cos(np.deg2rad(zenith))]).T
     
     sinVB = np.linalg.norm(np.cross(V/np.linalg.norm(V, axis=1)[:,None], B/np.linalg.norm(B, axis=1)), axis=1)
 
