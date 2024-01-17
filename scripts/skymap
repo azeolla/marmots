@@ -88,6 +88,7 @@ import numpy as np
 import marmots.effective_area as effective_area
 from marmots.tauexit import TauExitLUT
 from marmots.efield import EFieldParam
+from marmots.pythia import Tau_Decay_Simulator
 import matplotlib.pyplot as plt
 
 
@@ -123,6 +124,8 @@ tauexit = TauExitLUT(energy=Enu, thickness=0)
 # load the field parameterization.
 voltage = EFieldParam()
 
+taudecay = Tau_Decay_Simulator(pol="negative")
+
 def pix_loop(i):
     # calculate the effective area
     results = effective_area.calculate(
@@ -135,6 +138,7 @@ def pix_loop(i):
         fov,
         tauexit,
         voltage,
+        taudecay,
         np.radians(args.max_view),
         args.ntrials,
         args.antennas,
