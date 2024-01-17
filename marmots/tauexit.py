@@ -9,7 +9,7 @@ import numpy as np
 import numpy.ma as ma
 from numba import njit
 
-from marmots import data_directory
+from poinsseta import data_directory
 
 
 @attr.s
@@ -113,7 +113,8 @@ class TauExitLUT:
         Pexit = self.get_pexit(exittheta)
 
         # find the closest index in angle
-        nearest = np.abs(exittheta[:, None] - self.exit_theta[None, :]).argmin(axis=-1)
+        #nearest = np.abs(exittheta[:, None] - self.exit_theta[None, :]).argmin(axis=-1)
+        nearest = get_closest(self.exit_theta, exittheta)
 
         # and make sure index is within a valid range
         idxs = np.clip(nearest, 0, self.exit_theta.size - 1)
@@ -291,7 +292,7 @@ def interp(
             mid = np.interp(u[i], quantiles, energy_quantiles[qidx, :])
 
         # sample from the upper angular bin
-        if qidx < idxs.shape[0] - 1 and nexit[qidx + 1] != 0:
+        if qidx < exit_theta.shape[0] - 1 and nexit[qidx + 1] != 0:
             high = np.interp(uhigh[i], quantiles, energy_quantiles[qidx + 1, :])
 
         # we are at the left-most edge of the LUT
@@ -306,7 +307,7 @@ def interp(
                 energies[i] = np.interp(u[i], quantiles, energy_quantiles[qidx, :])
 
         # we are at the right-most edge of the bin
-        elif qidx == idxs.shape[0] - 1:
+        elif qidx == exit_theta.shape[0] - 1:
             if nexit[qidx - 1] != 0:
                 energies[i] = np.interp(
                     theta[i], exit_theta[qidx - 1 : qidx + 1], np.asarray([low, mid])
@@ -360,3 +361,16 @@ def interp(
 
     # and return the output energies
     return energies
+
+
+def get_closest(array: np.ndarray, values: np.ndarray) -> np.ndarray:
+    # faster than argmin, and uses less RAM
+
+    # get insert positions
+    idxs = array.size - np.searchsorted(array, values, side="left", sorter=array.argsort())
+    
+    # find indexes where previous index is closer
+    prev_idx_is_less = ((idxs == len(array))|(np.fabs(values - array[np.maximum(idxs-1, 0)]) < np.fabs(values - array[np.minimum(idxs, len(array)-1)])))
+    idxs[prev_idx_is_less] -= 1
+    
+    return idxs
