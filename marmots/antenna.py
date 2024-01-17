@@ -85,7 +85,7 @@ Z_im_interp_hpol = Akima1DInterpolator(hpol_impedance.freq_MHz, hpol_impedance.I
 Z_L = 200.0  # Ohms, the impedance at the load
 T_L = 100.0 # Kelvin, noise temperature of the first stage beacon amps
 
-ground_temp = 290 # Kelvin
+ground_temp = 300 # Kelvin
 sky_frac = 0.5
 
 
@@ -174,7 +174,7 @@ def Vrms(freqs: np.ndarray, antennas: int):
     ) # noise due to galactic, extragalactic, and ground
     noise *= P_div
     noise += (
-        4.0 * k_b * T_L * np.real(Z_L)
+        k_b * T_L * np.real(Z_L)
     )  # internal noise
     
     noise[np.isnan(noise)] = 0 # replace all NaNs with 0
