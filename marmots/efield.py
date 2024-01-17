@@ -6,7 +6,7 @@ from typing import Any, Tuple
 
 import attr
 import numpy as np
-from interpolation.splines import CGrid, eval_linear
+from interpolation.splines import CGrid, eval_linear, extrap_options
 from numba import njit
 from scipy.interpolate import interpn
 from igrf12 import igrf
@@ -81,7 +81,7 @@ class EFieldParam():
         #view = np.clip(view, 0.04, 3.16)
         #decay = np.clip(decay_altitude, 0, self.sim_altitude - 0.5)
 
-        voltage = np.zeros((view.size, freqs.size))
+        voltage = np.zeros(view.size)
 
         too_far = decay_length > dbeacon
         
@@ -101,8 +101,7 @@ class EFieldParam():
         distance_decay_km = distance_to_decay[~cut]
 
         alt_idx = np.abs(self.altitudes - detector_altitude).argmin()
-        
-        
+         
 
         # interpolate to find the distance from decay to detector in ZHAireS
         sim_distance_decay_km = interpn(
@@ -112,6 +111,8 @@ class EFieldParam():
             bounds_error=False,
             fill_value=None,
         )
+        
+        sim_distance_decay_km[sim_distance_decay_km < 0] = 0
 
         sim_sinVB = interpn(
             (self.zenith_list[alt_idx], self.decay_list[alt_idx]),
@@ -120,37 +121,39 @@ class EFieldParam():
             bounds_error=False,
             fill_value=None,
         )
+
+        sim_sinVB[sim_sinVB < 0] = 0
         
         mag, sinVB = geomag(beacon, decay_zenith, decay_azimuth)
 
         efields = eval(self.grid[alt_idx], self.values[alt_idx], freqs, decay_altitude, exit_zenith, view).T
 
         # calculate the voltage at each frequency
-        voltage[~cut] = antenna.voltage_from_field(
+        voltage[~cut] = np.sum(antenna.voltage_from_field(
             efields,
             freqs,
             antennas,
             theta,
-            phi,
-        )
+            (phi+360) % 360,
+        ), axis=1)
 
         # account for ZHAIReS sims only extending to 3.16 deg in view angle
-        view_factor = np.ones(voltage[~cut].shape[0])
+        view_factor = np.ones(view.size)
 
         view_factor[view > 3.16] = np.exp(
-                    -(view[view > 3.16]**2) / (2 * 3.16)**2
+                    -(view[view > 3.16])**2 / (2 * 3.16)**2
                 )
 
-        voltage[~cut] *= view_factor[:,None]
+        voltage[~cut] *= view_factor
 
         # distance correction (ZHAireS distance over Poinsseta distance)
-        voltage[~cut] *= (sim_distance_decay_km / distance_decay_km)[:,None]
+        voltage[~cut] *= (sim_distance_decay_km / distance_decay_km)
 
         # energy scaling
-        voltage[~cut] *= (shower_energy / self.sim_energy)[:,None]
+        voltage[~cut] *= (shower_energy / self.sim_energy)
         
         # correct for changing magnetic field and azimuth
-        voltage[~cut] *= (mag/self.sim_Bmag * sinVB/sim_sinVB)[:,None]
+        voltage[~cut] *= (mag/self.sim_Bmag * sinVB/sim_sinVB)
 
         # replace NaNs with zeros
         voltage[np.isnan(voltage)] = 0
@@ -277,6 +280,7 @@ def eval(
             np.column_stack(
                 (np.repeat(freqs[i], zenith.shape[-1]), decay, zenith, view)
             ),
+            extrap_options.LINEAR
         )
 
     # and we are done
@@ -422,7 +426,8 @@ def distance_decay_to_detector_LUT(
 def geomag(
     station: np.ndarray, zenith: np.ndarray, azimuth: np.ndarray
 ) -> np.ndarray:
-
+    
+    '''
     with open('/dev/null', 'w') as devnull:
         oldstdout_fno = os.dup(sys.stdout.fileno())
         os.dup2(devnull.fileno(), 1)
@@ -432,8 +437,9 @@ def geomag(
         os.dup2(oldstdout_fno, 1)
         
         os.close(oldstdout_fno)
-    
-    #geomag = igrf('2022-10-12', glat=station.lat.value, glon=station.lon.value, alt_km=station.height.value)
+   ''' 
+
+    geomag = igrf('2022-10-12', glat=station[0], glon=station[1], alt_km=station[2])
     
     mag = geomag.total.values[0]
     B = np.array([geomag.east.values, geomag.north.values, -geomag.down.values]).T

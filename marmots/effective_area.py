@@ -13,9 +13,6 @@ from marmots.constants import Re
 
 # import marmots.events as events
 import marmots.geometry as geometry
-import marmots.tauola as tauola
-from marmots.efield import EFieldParam
-from marmots.tauexit import TauExitLUT
 #import time
 
 
@@ -29,6 +26,7 @@ def calculate(
     fov: np.ndarray,
     tauexit,
     voltage,
+    taudecay,
     maxview: float = np.radians(3.0),
     N: Union[np.ndarray, int] = 1_000_000,
     antennas: int = 4,
@@ -72,13 +70,14 @@ def calculate(
     # compute the geometric area at the desired elevation angles
     Ag = geometry.geometric_area(
         ra, dec, lat, lon, altitude, maxview, orientations, fov, N=N,
-    )
+        )
 
     if Ag.emergence.size == 0:
         geometric = 0
         pexit = 0
         pdet = 0
         effective_area = 0
+        coincidence_frac = np.nan
     else:
 
         # get the exit probability at these elevation angles
@@ -87,10 +86,10 @@ def calculate(
         Pexit, Etau = tauexit(90.0 - np.rad2deg(Ag.emergence))
 
         # get a random set of decay lengths at these energies
-        decay_length = tauola.sample_range(Etau)
+        decay_length = taudecay.sample_range(Etau)
 
         # and then sample the energy of the tau's
-        Eshower = tauola.sample_shower_energies(Etau, N=decay_length.size)
+        Eshower = taudecay.shower_energy(Etau)
 
         # location of the decay
         decay_point = Ag.trials + (Ag.axis[:,None] * decay_length).T
@@ -110,14 +109,16 @@ def calculate(
 
         n_stations = Ag.stations["geocentric"].shape[0]
 
-        Ptrig = np.zeros((n_stations, Ag.trials.shape[0]))
-
-        ground_view = geometry.view_angle(Ag.trials, Ag.stations["geocentric"], Ag.axis)
+        triggers = np.zeros(Ag.trials.shape[0])
 
         # iterate over stations
         for i in range(n_stations):
+            
+            ground_view = geometry.view_angle(Ag.trials, Ag.stations["geocentric"][i], Ag.axis) 
 
-            in_sight = ground_view[i] <= maxview
+            trigger = np.zeros(Ag.trials.shape[0])
+
+            in_sight = ground_view <= maxview
 
             distance_to_decay = np.linalg.norm(Ag.stations["geocentric"][i] - decay_point[in_sight], axis=1)
 
@@ -129,12 +130,14 @@ def calculate(
 
             phi_from_boresight = phi - Ag.orientations[i]
 
-            detector_altitude = np.linalg.norm(Ag.stations["geocentric"][i] - Re)
+            detector_altitude = Ag.stations["geodetic"][i][2]
+
+            dbeacon = np.linalg.norm(Ag.stations["geocentric"][i] - Ag.trials[in_sight], axis=1)
 
             # compute the voltage at each of these off-axis angles and at each frequency
             V = voltage(
                 np.rad2deg(decay_view),
-                np.rad2deg(exit_zenith),
+                np.rad2deg(exit_zenith[in_sight]),
                 decay_altitude[in_sight],
                 decay_length[in_sight],
                 np.rad2deg(decay_zenith[in_sight]),
@@ -142,7 +145,7 @@ def calculate(
                 distance_to_decay,
                 detector_altitude,
                 Ag.stations["geodetic"][i],
-                Ag.dbeacon[i][in_sight],
+                dbeacon,
                 freqs,
                 Eshower[in_sight],
                 antennas,
@@ -153,47 +156,25 @@ def calculate(
             
 
             # calculate the SNR
-            SNR = np.sum(V, axis=1) / vrms
+            SNR = V / vrms
 
             # and check for a trigger
-            Ptrig[i][in_sight] = SNR > trigger_SNR
+            trigger[in_sight] = SNR > trigger_SNR
 
-            # and use this to compute the angle below ANITA's horizontal
-            elev = (np.pi / 2.0) - theta
+            triggers = triggers + trigger
 
-            # calculate the distance (km) to the horizon from ANITA
-            horizon_distance = geometry.distance_to_horizon(
-                height=detector_altitude, radius=Re
-            )
-
-            # the decay points that are further away than the horizon
-            beyond = distance_to_decay > horizon_distance
-            del horizon_distance
-
-            # and the particles that appear to be below the horizon
-            # remember: more negative is below the horizon
-            below = elev < geometry.horizon_angle(detector_altitude, radius=Re)
-
-            # those that are beyond the horizon and below the horizon
-            invisible = np.logical_and(beyond, below)
-            del beyond, below
-
-            # if the trial is invisible, there's no way we can trigger on it
-            Ptrig[i][in_sight][invisible] = 0.0
-
-            # if the event is above ANITA's horizon, we would not find
-            # them in the search as they would be treated as background
-            Ptrig[i][in_sight][elev > 0.0] = 0.0
-
-        Pdet = np.sum(Ptrig, axis=0) > 0
+        coincidences = np.sum(triggers > 1)
+        Pdet = triggers > 0
+        num_triggers = np.sum(Pdet)
 
         # and save the various effective area coefficients at these angles
-        geometric = (Ag.area * np.sum(Ag.dot)) / (N * n_stations)
+        geometric = (Ag.area * np.sum(Ag.dot)) / Ag.N
         pexit = np.mean(Pexit)
         pdet = np.mean(Pdet)
-        effective_area = np.sum(Ag.area * Ag.dot * Pexit * Pdet) / (N * n_stations)
+        effective_area = np.sum(Ag.area * Ag.dot * Pexit * Pdet) / Ag.N
+        coincidence_frac = coincidences/num_triggers
 
     #end = time.time()
     # and now return the computed parameters
-    return np.array([geometric, pexit, pdet, effective_area])
+    return np.array([geometric, pexit, pdet, effective_area, coincidence_frac])
     #return end - begin
