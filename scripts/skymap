@@ -58,10 +58,10 @@ if __name__ == "__main__":
         help="The maximum view angle for trials (3.0) [degrees].",
     )
     parser.add_argument(
-        "--fov",
+        "--min-elev",
         type=float,
-        default=120,
-        help="The field of view of a station (120) [degrees]."
+        default=-30,
+        help="The minimum elevation angle to a source to consider.",
     )
     parser.add_argument(
         "--save-plot",
@@ -144,6 +144,7 @@ def pix_loop(i):
         args.antennas,
         freqs,
         args.trigger,
+        np.radians(args.min_elev)
     )
 
     return results

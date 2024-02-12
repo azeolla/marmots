@@ -12,6 +12,7 @@ from scipy.interpolate import interpn
 from igrf12 import igrf
 
 import marmots.antenna as antenna
+import marmots.geometry as geometry
 from marmots import data_directory
 from marmots.constants import Re
 
@@ -76,10 +77,6 @@ class EFieldParam():
             Returns the voltage (V) evaluated at each view angle.
 
         """
-        # clip the arrays to the ZHArieS sim bounds
-        #zenith = np.clip(exit_zenith, 55.0, 89.0)
-        #view = np.clip(view, 0.04, 3.16)
-        #decay = np.clip(decay_altitude, 0, self.sim_altitude - 0.5)
 
         voltage = np.zeros(view.size)
 
@@ -102,14 +99,13 @@ class EFieldParam():
 
         alt_idx = np.abs(self.altitudes - detector_altitude).argmin()
          
-
         # interpolate to find the distance from decay to detector in ZHAireS
-        sim_distance_decay_km = interpn(
-            (self.zenith_list[alt_idx], self.decay_list[alt_idx], self.view_list[alt_idx]),
+        sim_distance_decay_km = distance_interp(
+            self.dist_grid[alt_idx],
             self.Dsim[alt_idx],
-            (exit_zenith, decay_altitude, view),
-            bounds_error=False,
-            fill_value=None,
+            exit_zenith, 
+            decay_altitude, 
+            view,
         )
         
         sim_distance_decay_km[sim_distance_decay_km < 0] = 0
@@ -124,18 +120,18 @@ class EFieldParam():
 
         sim_sinVB[sim_sinVB < 0] = 0
         
-        mag, sinVB = geomag(beacon, decay_zenith, decay_azimuth)
+        mag, sinVB = geomag(self.bfield_grid, self.bfield, beacon, decay_zenith, decay_azimuth)
 
-        efields = eval(self.grid[alt_idx], self.values[alt_idx], freqs, decay_altitude, exit_zenith, view).T
+        efields = efield_interp(self.efield_grid[alt_idx], self.values[alt_idx], freqs, decay_altitude, exit_zenith, view)
 
-        # calculate the voltage at each frequency
-        voltage[~cut] = np.sum(antenna.voltage_from_field(
+        # calculate the voltage for each event
+        voltage[~cut] = antenna.voltage_from_field(
             efields,
             freqs,
             antennas,
             theta,
             (phi+360) % 360,
-        ), axis=1)
+        )
 
         # account for ZHAIReS sims only extending to 3.16 deg in view angle
         view_factor = np.ones(view.size)
@@ -176,6 +172,8 @@ class EFieldParam():
 
         # we now construct the distance LUT for the electric field scaling
 
+        # we now construct the distance LUT for the electric field scaling
+
         self.Dsim = []
         self.sim_Bmag = 56000
         sim_incl = 63.5
@@ -196,11 +194,12 @@ class EFieldParam():
 
             B = np.array([np.cos(np.deg2rad(sim_incl)), 0, -np.sin(np.deg2rad(sim_incl))])
             V = np.array([np.sin(np.deg2rad(zenith_decay)), np.zeros(zenith_decay.shape), np.cos(np.deg2rad(zenith_decay))]).T
-            sinVB = np.linalg.norm(np.cross(V, B), axis=1)
+            sinVB = geometry.norm(np.cross(V, B))
 
             sinVB = sinVB.reshape((self.zenith_list[i].size, self.decay_list[i].size, self.view_list[i].size))
                 
             self.sim_sinVB.append(sinVB[:,:,0]) # sin(VxB) is independent of the view angle
+
 
     def load_file(self) -> None:
         """
@@ -214,10 +213,15 @@ class EFieldParam():
         self.decay_list = []
         self.zenith_list = []
         self.view_list = []
-        self.grid = []
+        self.efield_grid = []
+        self.dist_grid = []
 
         self.sim_icethick = 0.0
         self.sim_energy = 1e17
+        
+        geomag_file = np.load(self.param_dir + f"/geomagnetic.npz", allow_pickle=True)
+        self.bfield_grid = CGrid(geomag_file["lat"], geomag_file["lon"])
+        self.bfield = geomag_file["bfield"]
 
         for altitude in self.altitudes:
             interp_file = np.load(self.param_dir + f"/efield_lookup_{str(altitude)}km.npz", allow_pickle=True)
@@ -230,13 +234,55 @@ class EFieldParam():
             self.zenith_list.append(grid[2])
             self.view_list.append(grid[3])
 
-            self.grid.append(CGrid(freqs, grid[1], grid[2], grid[3]))
-
-            
+            self.efield_grid.append(CGrid(freqs, grid[1], grid[2], grid[3]))
+            self.dist_grid.append(CGrid(grid[2], grid[1], grid[3]))
 
 
 @njit
-def eval(
+def distance_interp(
+    grid: Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    values: np.ndarray,
+    zenith: np.ndarray,
+    decay: np.ndarray,
+    view: np.ndarray,
+) -> np.ndarray:
+    """
+    Perform a multi-dimensional linear interpolation using Numba.
+
+    Parameters
+    ----------
+    grid: CGrid
+        The rectangular grid for the interpolation.
+    values: np.ndarray
+        The 4D array of values at the grid locations.
+    decay: np.ndarray
+        The decay altitudes to interpolate at (km).
+    zenith: np.ndarray
+        The zenith angles to interpolate at (degrees).
+    view: np.ndarray
+        The view to interpolate at (degrees).
+
+    Returns
+    -------
+    distance: np.ndarray
+       The distance from decay to detector given the exit zenith angle, decay altitude, and view angle.
+    """
+    # Perform the interpolation
+    out = eval_linear(
+        grid,
+        values,
+        np.column_stack(
+            (zenith, decay, view)
+        ),
+        extrap_options.LINEAR
+    )
+
+    # and we are done
+    return out
+
+
+@njit
+def efield_interp(
     grid: Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
     values: np.ndarray,
     freqs: np.ndarray,
@@ -268,7 +314,7 @@ def eval(
        The electric field interpolated at each (f, d, z, v).
     """
     # allocate the output array
-    out = np.zeros((freqs.shape[-1], zenith.shape[-1]), dtype=np.float64)
+    out = np.empty((freqs.shape[-1], zenith.shape[-1]), dtype=np.float64)
 
     # loop over the array
     for i in np.arange(freqs.shape[-1]):
@@ -285,6 +331,7 @@ def eval(
 
     # and we are done
     return out
+
 
 def get_X0(
     zenith: np.ndarray, decay_altitude: np.ndarray, ice: float = 0.0
@@ -423,29 +470,60 @@ def distance_decay_to_detector_LUT(
     return distance, zenith_decay
 
 
+@njit
+def interp_bfield(
+    grid: Tuple[np.ndarray, np.ndarray],
+    values: np.ndarray,
+    lat: float,
+    lon: float,
+) -> np.ndarray:
+    """
+    Perform a multi-dimensional linear interpolation using Numba.
+
+    Parameters
+    ----------
+    grid: CGrid
+        The rectangular grid for the interpolation.
+    values: np.ndarray
+        The 4D array of values at the grid locations.
+    decay: np.ndarray
+        The decay altitudes to interpolate at (km).
+    zenith: np.ndarray
+        The zenith angles to interpolate at (degrees).
+    view: np.ndarray
+        The view to interpolate at (degrees).
+
+    Returns
+    -------
+    distance: np.ndarray
+       The distance from decay to detector given the exit zenith angle, decay altitude, and view angle.
+    """
+    # Perform the interpolation
+    out = eval_linear(
+        grid,
+        values,
+        np.array([lat, lon]),
+        extrap_options.LINEAR
+    )
+
+    # and we are done
+    return out
+
+
 def geomag(
-    station: np.ndarray, zenith: np.ndarray, azimuth: np.ndarray
+    grid, values, station: np.ndarray, zenith: np.ndarray, azimuth: np.ndarray
 ) -> np.ndarray:
     
-    '''
-    with open('/dev/null', 'w') as devnull:
-        oldstdout_fno = os.dup(sys.stdout.fileno())
-        os.dup2(devnull.fileno(), 1)
-
-        geomag = igrf('2022-10-12', glat=station[0], glon=station[1], alt_km=station[2])
-
-        os.dup2(oldstdout_fno, 1)
-        
-        os.close(oldstdout_fno)
-   ''' 
-
-    geomag = igrf('2022-10-12', glat=station[0], glon=station[1], alt_km=station[2])
+    B = interp_bfield(grid, values, station[0], station[1])
     
-    mag = geomag.total.values[0]
-    B = np.array([geomag.east.values, geomag.north.values, -geomag.down.values]).T
-    V = np.array([np.sin(np.deg2rad(zenith))*np.cos(np.deg2rad(azimuth)), np.sin(np.deg2rad(zenith))*np.sin(np.deg2rad(azimuth)), np.cos(np.deg2rad(zenith))]).T
+    mag = np.linalg.norm(B)
     
-    sinVB = np.linalg.norm(np.cross(V/np.linalg.norm(V, axis=1)[:,None], B/np.linalg.norm(B, axis=1)), axis=1)
-
+    V = np.empty((zenith.size,3))
+    V[:,0] = np.sin(np.deg2rad(zenith))*np.cos(np.deg2rad(azimuth))
+    V[:,1] = np.sin(np.deg2rad(zenith))*np.sin(np.deg2rad(azimuth))
+    V[:,2] = np.cos(np.deg2rad(zenith))
+    
+    sinVB = geometry.norm(np.cross( V, B/mag))
+    
     return mag, sinVB
 

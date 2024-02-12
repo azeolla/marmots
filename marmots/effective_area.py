@@ -32,6 +32,7 @@ def calculate(
     antennas: int = 4,
     freqs: np.ndarray = np.arange(30,80,10)+5,
     trigger_SNR: float = 5.0,
+    min_elev: float = np.deg2rad(-30)
 ) -> np.ndarray:
 
     """
@@ -69,7 +70,7 @@ def calculate(
 
     # compute the geometric area at the desired elevation angles
     Ag = geometry.geometric_area(
-        ra, dec, lat, lon, altitude, maxview, orientations, fov, N=N,
+        ra, dec, lat, lon, altitude, maxview, orientations, fov, N=N,min_elev=min_elev
         )
 
     if Ag.emergence.size == 0:
@@ -95,44 +96,41 @@ def calculate(
         decay_point = Ag.trials + (Ag.axis[:,None] * decay_length).T
 
         # and get the altitude at the decay points
-        decay_altitude = np.linalg.norm(decay_point,axis=1) - Re
+        decay_altitude = geometry.norm(decay_point) - Re
 
         # get the zenith angle at the exit points
         exit_zenith = (np.pi/2.0) - Ag.emergence
 
-        decay_point_spherical = geometry.cartesian_to_spherical(decay_point)
-        axis_spherical = geometry.cartesian_to_spherical(np.array([Ag.axis]))
-
-        decay_zenith, decay_azimuth = geometry.decay_zenith_azimuth(decay_point, Ag.axis, decay_point_spherical, axis_spherical)
+        decay_zenith, decay_azimuth, decay_point_spherical = geometry.decay_zenith_azimuth(decay_point, Ag.axis)
 
         vrms = antenna.Vrms(freqs, antennas)
 
-        n_stations = Ag.stations["geocentric"].shape[0]
+        n_stations = len(Ag.stations)
 
         triggers = np.zeros(Ag.trials.shape[0])
 
         # iterate over stations
         for i in range(n_stations):
             
-            ground_view = geometry.view_angle(Ag.trials, Ag.stations["geocentric"][i], Ag.axis) 
+            ground_view = geometry.view_angle(Ag.trials, Ag.stations[i]["geocentric"], Ag.axis) 
 
             trigger = np.zeros(Ag.trials.shape[0])
 
             in_sight = ground_view <= maxview
 
-            distance_to_decay = np.linalg.norm(Ag.stations["geocentric"][i] - decay_point[in_sight], axis=1)
+            distance_to_decay = geometry.norm(Ag.stations[i]["geocentric"] - decay_point[in_sight])
 
             # calculate the view angle from the decay points
-            decay_view = geometry.decay_view(decay_point[in_sight], Ag.axis, Ag.stations["geocentric"][i])
+            decay_view = geometry.decay_view(decay_point[in_sight], Ag.axis, Ag.stations[i]["geocentric"])
 
             # the zenith and azimuth (measured from East to North) from the station to each decay point
-            theta, phi = geometry.obs_zenith_azimuth(Ag.stations["geocentric"][i], decay_point[in_sight], Ag.stations["geodetic"][i], decay_point_spherical[in_sight])
+            theta, phi = geometry.obs_zenith_azimuth(Ag.stations[i], decay_point[in_sight], decay_point_spherical[in_sight])
 
             phi_from_boresight = phi - Ag.orientations[i]
 
-            detector_altitude = Ag.stations["geodetic"][i][2]
+            detector_altitude = Ag.stations[i]["geodetic"][2]
 
-            dbeacon = np.linalg.norm(Ag.stations["geocentric"][i] - Ag.trials[in_sight], axis=1)
+            dbeacon = geometry.norm(Ag.stations[i]["geocentric"] - Ag.trials[in_sight])
 
             # compute the voltage at each of these off-axis angles and at each frequency
             V = voltage(
@@ -144,7 +142,7 @@ def calculate(
                 np.rad2deg(decay_azimuth[in_sight]),
                 distance_to_decay,
                 detector_altitude,
-                Ag.stations["geodetic"][i],
+                Ag.stations[i]["geodetic"],
                 dbeacon,
                 freqs,
                 Eshower[in_sight],
