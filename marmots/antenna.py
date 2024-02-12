@@ -3,12 +3,14 @@ This module parameterizes the response of BEACON antennas to electric fields.
 """
 import numpy as np
 import pandas as pd
+from typing import Any, Tuple
 
 import marmots.sky as sky
 from marmots.constants import Z_0, c, k_b
 from marmots import data_directory
-from scipy.interpolate import Akima1DInterpolator, interpn
 from scipy.fft import rfftfreq, irfft
+from numba import jit, njit
+from interpolation.splines import CGrid, eval_linear, extrap_options
 
 #from scipy.fft import irfft
 
@@ -26,6 +28,7 @@ def read_xfdtd_gain(finame):
         finame,
         skiprows=1,
         names=["freq_MHz", "theta_deg", "phi_deg", "phiGain", "thetaGain"],
+        encoding="ISO 8859-1"
     )
 
     gain.freq_MHz *= 1000.0  # stored in GHz in csv file, convert to MHz here
@@ -52,17 +55,18 @@ def read_xfdtd_impedance(finame, Z0=50.0):
 
 
 hpol_gain_file = read_xfdtd_gain(
-            data_directory + "/beacon/beacon_150m_hpol_realized_gain_middle.csv"
+            data_directory + "/beacon/beacon_150m_hpol_gain_middle.csv"
         )
 hpol_csv_freqs = np.unique(hpol_gain_file.freq_MHz.values)
 hpol_theta = np.unique(hpol_gain_file.theta_deg.values)
 hpol_az = np.unique(hpol_gain_file.phi_deg.values)
 hpol_gain = hpol_gain_file.G_dBi.values.reshape((hpol_csv_freqs.size, hpol_theta.size, hpol_az.size))
 
+grid = CGrid(hpol_csv_freqs, hpol_theta, hpol_az)
 
 """
 vpol_gain_file = read_xfdtd_gain(
-            data_directory + "/beacon/beacon_150m_vpol_realized_gain_middle.csv"
+            data_directory + "/beacon/beacon_150m_vpol_gain_middle.csv"
         )
 vpol_csv_freqs = vpol_gain_file.freq_MHz.values
 vpol_theta = vpol_gain_file.theta_deg.values
@@ -73,9 +77,9 @@ vpol_gain_interp = LinearNDInterpolator((vpol_csv_freqs, vpol_theta, vpol_az), v
 """
 
 hpol_impedance = read_xfdtd_impedance(data_directory + "/beacon/beacon_150m_hpol_impedance_middle.csv")
-
-Z_re_interp_hpol = Akima1DInterpolator(hpol_impedance.freq_MHz, hpol_impedance.RealZ)
-Z_im_interp_hpol = Akima1DInterpolator(hpol_impedance.freq_MHz, hpol_impedance.ImagZ)
+hpol_impedance_freqs = np.array(hpol_impedance.freq_MHz)
+hpol_impedance_real = np.array(hpol_impedance.RealZ)
+hpol_impedance_imag = np.array(hpol_impedance.ImagZ)
         
 # vpol_impedance = read_xfdtd_impedance(data_directory + "/beacon/beacon_150m_vpol_impedance_middle.csv")
 
@@ -89,28 +93,74 @@ ground_temp = 300 # Kelvin
 sky_frac = 0.5
 
 
-def effective_height(freqs):
+@njit
+def effective_height(freqs) -> np.ndarray:
+    
+    resistance = np.interp(freqs, hpol_impedance_freqs, hpol_impedance_real)
+    reactance = np.interp(freqs, hpol_impedance_freqs, hpol_impedance_imag)
            
     h_eff = (
-        4.0 * Z_re_interp_hpol(freqs) / Z_0 * (c/freqs)**2 / 4.0 / np.pi
+        4.0 * resistance / Z_0 * (c/freqs)**2 / 4.0 / np.pi
     )
     
     P_div = (
         np.abs(Z_L) ** 2
         / np.abs(
-            Z_re_interp_hpol(freqs)
-            + 1j * Z_im_interp_hpol(freqs)
+            resistance
+            + 1j * reactance
             + Z_L
         )
         ** 2
     )
     
     h_eff *= P_div
-    
-    h_eff = np.sqrt(h_eff.astype(np.complex))
         
-    return abs(h_eff)
+    return np.sqrt(h_eff)
 
+
+@njit
+def directivity(
+    grid: Tuple[np.ndarray, np.ndarray, np.ndarray],
+    values: np.ndarray,
+    freqs: np.ndarray,
+    theta: np.ndarray,
+    phi: np.ndarray,
+) -> np.ndarray:
+    """
+    Perform a multi-dimensional linear interpolation using Numba.
+
+    Parameters
+    ----------
+    grid: CGrid
+        The rectangular grid for the interpolation.
+    values: np.ndarray
+        The 4D array of values at the grid locations.
+    freqs: np.ndarray
+        The frequencies to interpolate at (MHz).
+    decay: np.ndarray
+        The decay altitudes to interpolate at (km).
+    zenith: np.ndarray
+        The zenith angles to interpolate at (degrees).
+    view: np.ndarray
+        The view to interpolate at (degrees).
+
+    Returns
+    -------
+    Efield: np.ndarray
+       The electric field interpolated at each (f, d, z, v).
+    """
+    # allocate the output array
+    D = np.zeros((freqs.size, theta.size), dtype=np.float64)
+
+    for i in np.arange(freqs.shape[-1]):
+        D[i,:] = eval_linear(
+            grid, 
+            values, 
+            np.column_stack(
+                    (np.repeat(freqs[i], phi.size), theta, phi)
+                ).astype(np.float64), extrap_options.LINEAR)
+    # and we are done
+    return D
 
 
 def voltage_from_field(
@@ -138,20 +188,16 @@ def voltage_from_field(
     voltage; np.ndarray
         The voltage seen at the load of the antenna.
     """
-
-    phi = (phi + 360) % 360
-
-    f, t = np.meshgrid(freqs, theta)
-    __, p = np.meshgrid(freqs, phi)
-
     # calculate the linear gain - `gain` must be power gain.
-    D = interpn((hpol_csv_freqs, hpol_theta, hpol_az),
-        hpol_gain,
-        (f, t, p),
-       )
+    D = directivity(grid, hpol_gain, freqs, theta, phi)
+
     G = (10 ** (D / 10.0))
 
-    return antennas * Epeak * effective_height(freqs) * np.sqrt(G)
+    x = antennas * effective_height(freqs) * Epeak.T
+    
+    out = np.sum(x * np.sqrt(G.T), axis=1)
+
+    return out
 
 
 def Vrms(freqs: np.ndarray, antennas: int):
@@ -159,18 +205,21 @@ def Vrms(freqs: np.ndarray, antennas: int):
     The RMS voltage created by galactic, extragalactic, ground, and system noise.
     """
     
+    resistance = np.interp(freqs, hpol_impedance_freqs, hpol_impedance_real)
+    reactance = np.interp(freqs, hpol_impedance_freqs, hpol_impedance_imag)
+    
     # P_div is the power from the voltage divider
     P_div = (
         np.abs(Z_L) ** 2
         / np.abs(
             Z_L
-            + Z_re_interp_hpol(freqs)
-            + 1j * Z_im_interp_hpol(freqs)
+            + resistance
+            + 1j * reactance
         )
         ** 2
     )
     noise = (
-        4.0 * k_b * Z_re_interp_hpol(freqs) * (sky_frac * sky.noise_temperature(freqs) + (1-sky_frac) * ground_temp)
+        4.0 * k_b * resistance * (sky_frac * sky.noise_temperature(freqs) + (1-sky_frac) * ground_temp)
     ) # noise due to galactic, extragalactic, and ground
     noise *= P_div
     noise += (
