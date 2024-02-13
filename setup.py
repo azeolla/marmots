@@ -32,7 +32,7 @@ setup(
     keywords='BEACON science neutrino point source',
     packages=find_packages(exclude=['contrib', 'docs', 'tests']),
     python_requires='>=3.6*, <4',
-    install_requires=['numpy', 'matplotlib', 'astropy', 'interpolation', 'numba', 'igrf12', 'healpy', 'p_tqdm'],
+    install_requires=['numpy', 'matplotlib', 'astropy', 'interpolation', 'numba', 'healpy', 'p_tqdm', 'triangle'],
     extras_require={
         'test': ['pytest', 'coverage'],
     },

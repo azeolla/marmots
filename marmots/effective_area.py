@@ -8,7 +8,7 @@ import numpy as np
 import astropy.coordinates as coordinates
 import astropy.units as u
 
-import marmots.antenna as antenna
+#import marmots.antenna as antenna
 from marmots.constants import Re
 
 # import marmots.events as events
@@ -27,12 +27,13 @@ def calculate(
     tauexit,
     voltage,
     taudecay,
+    detector,
     maxview: float = np.radians(3.0),
     N: Union[np.ndarray, int] = 1_000_000,
     antennas: int = 4,
     freqs: np.ndarray = np.arange(30,80,10)+5,
     trigger_SNR: float = 5.0,
-    min_elev: float = np.deg2rad(-30)
+    min_elev: float = np.deg2rad(-30),
 ) -> np.ndarray:
 
     """
@@ -103,7 +104,7 @@ def calculate(
 
         decay_zenith, decay_azimuth, decay_point_spherical = geometry.decay_zenith_azimuth(decay_point, Ag.axis)
 
-        vrms = antenna.Vrms(freqs, antennas)
+        vrms = detector.Vrms(freqs, antennas)
 
         n_stations = len(Ag.stations)
 
@@ -150,6 +151,7 @@ def calculate(
                 np.rad2deg(theta),
                 np.rad2deg(phi_from_boresight),
                 Ag.fov[i],
+                detector,
             )
             
 
