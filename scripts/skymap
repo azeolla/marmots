@@ -43,7 +43,7 @@ if __name__ == "__main__":
         type=int,
         nargs=2,
         default=[30, 80],
-        help="The range of frequencies ((30,80))) [MHz]."
+        help="The range of frequencies (30 80) [MHz]."
     )
     parser.add_argument(
         "--trigger",
@@ -62,6 +62,19 @@ if __name__ == "__main__":
         type=float,
         default=-30,
         help="The minimum elevation angle to a source to consider.",
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        choices=['prototype', 'matched'],
+        default="prototype",
+        help="The antenna model to use. Defaults to 'prototype'.",
+    )
+    parser.add_argument(
+        "--gain",
+        type=float,
+        default=4,
+        help="Constant gain over the bandwidth (4) [dBi].",
     )
     parser.add_argument(
         "--save-plot",
@@ -89,6 +102,7 @@ import marmots.effective_area as effective_area
 from marmots.tauexit import TauExitLUT
 from marmots.efield import EFieldParam
 from marmots.pythia import Tau_Decay_Simulator
+from marmots.antenna import Detector
 import matplotlib.pyplot as plt
 
 
@@ -126,6 +140,8 @@ voltage = EFieldParam()
 
 taudecay = Tau_Decay_Simulator(pol="negative")
 
+det = Detector(args.model, freqs, args.gain)
+
 def pix_loop(i):
     # calculate the effective area
     results = effective_area.calculate(
@@ -139,12 +155,13 @@ def pix_loop(i):
         tauexit,
         voltage,
         taudecay,
+        det,
         np.radians(args.max_view),
         args.ntrials,
         args.antennas,
         freqs,
         args.trigger,
-        np.radians(args.min_elev)
+        np.radians(args.min_elev),
     )
 
     return results

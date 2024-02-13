@@ -22,100 +22,177 @@ __all__ = [
     "get_Tground",
 ]
  
-
-def read_xfdtd_gain(finame):
-    gain = pd.read_csv(
-        finame,
-        skiprows=1,
-        names=["freq_MHz", "theta_deg", "phi_deg", "phiGain", "thetaGain"],
-        encoding="ISO 8859-1"
-    )
-
-    gain.freq_MHz *= 1000.0  # stored in GHz in csv file, convert to MHz here
-    gtheta = gain.thetaGain  # dBi
-    gphi = gain.phiGain  # dBi
-
-    G = np.sqrt(gtheta ** 2 + gphi ** 2)
-    gain["G_dBi"] = 10.0 * np.log10(G)
-
-    return gain
-
-def read_xfdtd_impedance(finame, Z0=50.0):
-    impedance = pd.read_csv(
-        finame, names=["freq_MHz", "RealZ", "ImagZ"], dtype=float, skiprows=1
-    )
-
-    impedance[
-        "freq_MHz"
-    ] *= 1000.0  # stored in GHz in csv file, convert to MHz here
-    impedance["Z"] = impedance.RealZ + 1j * impedance.ImagZ
-    impedance["Gamma"] = (impedance.Z - Z0) / (impedance.Z + Z0)
-    impedance["S11"] = 20.0 * np.log10(abs(impedance.Gamma))
-    return impedance
-
-
-hpol_gain_file = read_xfdtd_gain(
+class Detector:
+    def __init__(self, model, freqs, gain = None):
+        
+        if model == "prototype":
+            hpol_gain_file = self.read_xfdtd_gain(
             data_directory + "/beacon/beacon_150m_hpol_gain_middle.csv"
+                    )
+            hpol_csv_freqs = np.unique(hpol_gain_file.freq_MHz.values)
+            hpol_theta = np.unique(hpol_gain_file.theta_deg.values)
+            hpol_az = np.unique(hpol_gain_file.phi_deg.values)
+            self.hpol_gain = hpol_gain_file.G_dBi.values.reshape((hpol_csv_freqs.size, hpol_theta.size, hpol_az.size))
+
+            self.grid = CGrid(hpol_csv_freqs, hpol_theta, hpol_az)
+
+            hpol_impedance = self.read_xfdtd_impedance(data_directory + "/beacon/beacon_150m_hpol_impedance_middle.csv")
+            hpol_impedance_freqs = np.array(hpol_impedance.freq_MHz)
+            hpol_impedance_real = np.array(hpol_impedance.RealZ)
+            hpol_impedance_imag = np.array(hpol_impedance.ImagZ)
+
+            self.resistance = np.interp(freqs, hpol_impedance_freqs, hpol_impedance_real)
+            self.reactance = np.interp(freqs, hpol_impedance_freqs, hpol_impedance_imag)
+
+            self.Z_L = 200.0  # Ohms, the impedance at the load
+            self.T_L = 100.0 # Kelvin, noise temperature of the first stage beacon amps
+
+            self.ground_temp = 300 # Kelvin
+            self.sky_frac = 0.5
+
+            self.h_eff = self.effective_height(freqs)
+
+        elif model == "matched":
+
+            self.hpol_gain = gain
+
+            self.resistance = 50
+            self.reactance = 0
+
+            self.Z_L = 50  # Ohms, the impedance at the load
+            self.T_L = 100.0 # Kelvin, noise temperature of the first stage beacon amps
+
+            self.ground_temp = 300 # Kelvin
+            self.sky_frac = 0.5
+
+            self.h_eff = self.effective_height(freqs)
+
+        else:
+            print("Model not supported!")
+
+    def read_xfdtd_gain(self, finame):
+        gain = pd.read_csv(
+            finame,
+            skiprows=1,
+            names=["freq_MHz", "theta_deg", "phi_deg", "phiGain", "thetaGain"],
+            encoding="ISO 8859-1"
         )
-hpol_csv_freqs = np.unique(hpol_gain_file.freq_MHz.values)
-hpol_theta = np.unique(hpol_gain_file.theta_deg.values)
-hpol_az = np.unique(hpol_gain_file.phi_deg.values)
-hpol_gain = hpol_gain_file.G_dBi.values.reshape((hpol_csv_freqs.size, hpol_theta.size, hpol_az.size))
 
-grid = CGrid(hpol_csv_freqs, hpol_theta, hpol_az)
+        gain.freq_MHz *= 1000.0  # stored in GHz in csv file, convert to MHz here
+        gtheta = gain.thetaGain  # dBi
+        gphi = gain.phiGain  # dBi
 
-"""
-vpol_gain_file = read_xfdtd_gain(
-            data_directory + "/beacon/beacon_150m_vpol_gain_middle.csv"
+        G = np.sqrt(gtheta ** 2 + gphi ** 2)
+        gain["G_dBi"] = 10.0 * np.log10(G)
+
+        return gain
+
+    def read_xfdtd_impedance(self, finame, Z0=50.0):
+        impedance = pd.read_csv(
+            finame, names=["freq_MHz", "RealZ", "ImagZ"], dtype=float, skiprows=1
         )
-vpol_csv_freqs = vpol_gain_file.freq_MHz.values
-vpol_theta = vpol_gain_file.theta_deg.values
-vpol_az = vpol_gain_file.phi_deg.values
-vpol_gain = vpol_gain_file.G_dBi.values
 
-vpol_gain_interp = LinearNDInterpolator((vpol_csv_freqs, vpol_theta, vpol_az), vpol_gain)
-"""
+        impedance[
+            "freq_MHz"
+        ] *= 1000.0  # stored in GHz in csv file, convert to MHz here
+        impedance["Z"] = impedance.RealZ + 1j * impedance.ImagZ
+        impedance["Gamma"] = (impedance.Z - Z0) / (impedance.Z + Z0)
+        impedance["S11"] = 20.0 * np.log10(abs(impedance.Gamma))
+        return impedance
 
-hpol_impedance = read_xfdtd_impedance(data_directory + "/beacon/beacon_150m_hpol_impedance_middle.csv")
-hpol_impedance_freqs = np.array(hpol_impedance.freq_MHz)
-hpol_impedance_real = np.array(hpol_impedance.RealZ)
-hpol_impedance_imag = np.array(hpol_impedance.ImagZ)
+    def effective_height(self, freqs) -> np.ndarray:
+            
+        h_eff = (
+            4.0 * self.resistance / Z_0 * (c/freqs)**2 / 4.0 / np.pi
+        )
         
-# vpol_impedance = read_xfdtd_impedance(data_directory + "/beacon/beacon_150m_vpol_impedance_middle.csv")
-
-# Z_re_interp_vpol = Akima1DInterpolator(vpol_impedance.freq_MHz, vpol_impedance.RealZ)
-# Z_im_interp_vpol = Akima1DInterpolator(vpol_impedance.freq_MHz, vpol_impedance.ImagZ)
-
-Z_L = 200.0  # Ohms, the impedance at the load
-T_L = 100.0 # Kelvin, noise temperature of the first stage beacon amps
-
-ground_temp = 300 # Kelvin
-sky_frac = 0.5
-
-
-@njit
-def effective_height(freqs) -> np.ndarray:
-    
-    resistance = np.interp(freqs, hpol_impedance_freqs, hpol_impedance_real)
-    reactance = np.interp(freqs, hpol_impedance_freqs, hpol_impedance_imag)
-           
-    h_eff = (
-        4.0 * resistance / Z_0 * (c/freqs)**2 / 4.0 / np.pi
-    )
-    
-    P_div = (
-        np.abs(Z_L) ** 2
-        / np.abs(
-            resistance
-            + 1j * reactance
-            + Z_L
+        P_div = (
+            np.abs(self.Z_L) ** 2
+            / np.abs(
+                self.resistance
+                + 1j * self.reactance
+                + self.Z_L
+            )
+            ** 2
         )
-        ** 2
-    )
-    
-    h_eff *= P_div
         
-    return np.sqrt(h_eff)
+        h_eff *= P_div
+            
+        return np.sqrt(h_eff)
+
+    def voltage_from_field(
+        self, Epeak: np.ndarray, freqs: np.ndarray, antennas: int, theta: np.ndarray, phi: np.ndarray
+    ) -> np.ndarray:
+        """
+        Given a peak electric field (in V/m), calculate the voltage seen
+        at the load of the BEACON antenna.
+
+        See any RF or antenna textbook for a derivation of this.
+
+        Parameters
+        ----------
+        Epeak: np.ndarray
+            The peak-electric field (in V/m).
+        freqs: np.ndarray
+            The frequencies (in MHz) at which to evaluate.
+        antennas: int
+            The number of antennas.
+        gain: float
+            The peak gain (in dBi).
+
+        Returns
+        -------
+        voltage; np.ndarray
+            The voltage seen at the load of the antenna.
+        """
+        if type(self.hpol_gain) == np.ndarray:
+
+            # calculate the linear gain - `gain` must be power gain.
+            D = directivity(self.grid, self.hpol_gain, freqs, theta, phi)
+
+            G = (10 ** (D / 10.0))
+
+            x = antennas * self.h_eff * Epeak.T
+            
+            out = np.sum(x * np.sqrt(G.T), axis=1)
+        
+        else:
+
+            G = (10 ** (self.hpol_gain / 10.0))
+
+            x = antennas * self.h_eff * Epeak.T
+            
+            out = np.sum(x * np.sqrt(G), axis=1)
+
+        return out
+
+    def Vrms(self, freqs: np.ndarray, antennas: int):
+        """
+        The RMS voltage created by galactic, extragalactic, ground, and system noise.
+        """
+        
+        # P_div is the power from the voltage divider
+        P_div = (
+            np.abs(self.Z_L) ** 2
+            / np.abs(
+                self.Z_L
+                + self.resistance
+                + 1j * self.reactance
+            )
+            ** 2
+        )
+        noise = (
+            4.0 * k_b * self.resistance * (self.sky_frac * sky.noise_temperature(freqs) + (1-self.sky_frac) * self.ground_temp)
+        ) # noise due to galactic, extragalactic, and ground
+        noise *= P_div
+        noise += (
+            k_b * self.T_L * np.real(self.Z_L)
+        )  # internal noise
+        
+        noise[np.isnan(noise)] = 0 # replace all NaNs with 0
+        df = freqs[1]-freqs[0]
+        
+        return np.sqrt(np.sum(antennas*df*noise))
 
 
 @njit
@@ -163,73 +240,10 @@ def directivity(
     return D
 
 
-def voltage_from_field(
-    Epeak: np.ndarray, freqs: np.ndarray, antennas: int, theta: np.ndarray, phi: np.ndarray
-) -> np.ndarray:
-    """
-    Given a peak electric field (in V/m), calculate the voltage seen
-    at the load of the BEACON antenna.
-
-    See any RF or antenna textbook for a derivation of this.
-
-    Parameters
-    ----------
-    Epeak: np.ndarray
-        The peak-electric field (in V/m).
-    freqs: np.ndarray
-        The frequencies (in MHz) at which to evaluate.
-    antennas: int
-        The number of antennas.
-    gain: float
-        The peak gain (in dBi).
-
-    Returns
-    -------
-    voltage; np.ndarray
-        The voltage seen at the load of the antenna.
-    """
-    # calculate the linear gain - `gain` must be power gain.
-    D = directivity(grid, hpol_gain, freqs, theta, phi)
-
-    G = (10 ** (D / 10.0))
-
-    x = antennas * effective_height(freqs) * Epeak.T
-    
-    out = np.sum(x * np.sqrt(G.T), axis=1)
-
-    return out
 
 
-def Vrms(freqs: np.ndarray, antennas: int):
-    """
-    The RMS voltage created by galactic, extragalactic, ground, and system noise.
-    """
-    
-    resistance = np.interp(freqs, hpol_impedance_freqs, hpol_impedance_real)
-    reactance = np.interp(freqs, hpol_impedance_freqs, hpol_impedance_imag)
-    
-    # P_div is the power from the voltage divider
-    P_div = (
-        np.abs(Z_L) ** 2
-        / np.abs(
-            Z_L
-            + resistance
-            + 1j * reactance
-        )
-        ** 2
-    )
-    noise = (
-        4.0 * k_b * resistance * (sky_frac * sky.noise_temperature(freqs) + (1-sky_frac) * ground_temp)
-    ) # noise due to galactic, extragalactic, and ground
-    noise *= P_div
-    noise += (
-        k_b * T_L * np.real(Z_L)
-    )  # internal noise
-    
-    noise[np.isnan(noise)] = 0 # replace all NaNs with 0
-    df = freqs[1]-freqs[0]
-    
-    return np.sqrt(np.sum(antennas*df*noise))
+
+
     
    
 

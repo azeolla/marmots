@@ -11,7 +11,6 @@ from numba import njit
 from scipy.interpolate import interpn
 from igrf12 import igrf
 
-import marmots.antenna as antenna
 import marmots.geometry as geometry
 from marmots import data_directory
 from marmots.constants import Re
@@ -47,6 +46,7 @@ class EFieldParam():
         theta: np.ndarray,
         phi: np.ndarray,
         FoV: float,
+        detector,
     ) -> np.ndarray:
         """
         Evaluate the peak electric field from this parameterization at
@@ -125,7 +125,7 @@ class EFieldParam():
         efields = efield_interp(self.efield_grid[alt_idx], self.values[alt_idx], freqs, decay_altitude, exit_zenith, view)
 
         # calculate the voltage for each event
-        voltage[~cut] = antenna.voltage_from_field(
+        voltage[~cut] = detector.voltage_from_field(
             efields,
             freqs,
             antennas,
