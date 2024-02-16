@@ -9,7 +9,6 @@ import numpy as np
 from interpolation.splines import CGrid, eval_linear, extrap_options
 from numba import njit
 from scipy.interpolate import interpn
-from igrf12 import igrf
 
 import marmots.geometry as geometry
 from marmots import data_directory

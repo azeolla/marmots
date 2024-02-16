@@ -176,7 +176,7 @@ pdet = results[2]
 effective = results[3]
 
 average = np.zeros(effective.size)
-for i in range(359):
+for i in range(360):
     r = hp.Rotator(coord=['E'], rot=[i,0,0])
     m2 = r.rotate_map_pixel(effective)
     average += m2
