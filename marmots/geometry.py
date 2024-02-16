@@ -4,7 +4,7 @@ needed geometric quantities and formulas.
 """
 from typing import Any, NamedTuple, Tuple
 
-import numpy as nps
+import numpy as np
 import shapely
 from shapely.geometry import Polygon
 from shapely.ops import unary_union
