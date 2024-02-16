@@ -5,15 +5,9 @@ the tau point source effective area.
 from typing import Any, Union
 
 import numpy as np
-import astropy.coordinates as coordinates
-import astropy.units as u
 
-#import marmots.antenna as antenna
 from marmots.constants import Re
-
-# import marmots.events as events
 import marmots.geometry as geometry
-#import time
 
 
 def calculate(
@@ -127,7 +121,7 @@ def calculate(
             # the zenith and azimuth (measured from East to North) from the station to each decay point
             theta, phi = geometry.obs_zenith_azimuth(Ag.stations[i], decay_point[in_sight], decay_point_spherical[in_sight])
 
-            phi_from_boresight = phi - Ag.orientations[i]
+            phi_from_boresight = phi - np.rad2deg(Ag.orientations[i])
 
             detector_altitude = Ag.stations[i]["geodetic"][2]
 
@@ -160,6 +154,16 @@ def calculate(
 
             # and check for a trigger
             trigger[in_sight] = SNR > trigger_SNR
+            
+            height = Ag.stations[i]["geodetic"][2]
+
+            # and the particles that appear to be below the horizon
+            # remember: more negative is below the horizon
+            above = (np.pi/2 - theta) > geometry.horizon_angle(height)
+
+            # if the event is above the horizon, we would not find
+            # them in the search as they would be treated as background
+            trigger[in_sight][above] = 0.0
 
             triggers = triggers + trigger
 
@@ -172,7 +176,8 @@ def calculate(
         pexit = np.mean(Pexit)
         pdet = np.mean(Pdet)
         effective_area = np.sum(Ag.area * Ag.dot * Pexit * Pdet) / Ag.N
-        coincidence_frac = coincidences/num_triggers
+        with np.errstate(divide='ignore', invalid='ignore'):
+            coincidence_frac = coincidences/num_triggers
 
     #end = time.time()
     # and now return the computed parameters

@@ -9,7 +9,7 @@ import numpy as np
 import numpy.ma as ma
 from numba import njit
 
-from poinsseta import data_directory
+from marmots import data_directory
 
 
 @attr.s
