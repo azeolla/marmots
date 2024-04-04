@@ -38,6 +38,7 @@ class EFieldParam():
         distance_to_decay: np.ndarray,
         detector_altitude: float,
         beacon: np.ndarray,
+        dbeacon: np.ndarray,
         freqs: np.ndarray,
         shower_energy: np.ndarray,
         antennas: int,
@@ -78,7 +79,7 @@ class EFieldParam():
 
         voltage = np.zeros(view.size)
 
-        too_far = decay_length > distance_to_decay
+        too_far = decay_length > dbeacon
         
         outside_fov = ((phi < -FoV/2) | (phi > FoV/2))
         
