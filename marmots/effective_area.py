@@ -138,6 +138,7 @@ def calculate(
                 distance_to_decay,
                 detector_altitude,
                 Ag.stations[i]["geodetic"],
+                dbeacon,
                 freqs,
                 Eshower[in_sight],
                 antennas,
