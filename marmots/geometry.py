@@ -2,12 +2,9 @@
 This module provides free-functions for calculating various
 needed geometric quantities and formulas.
 """
-#from shutil import ReadError
 from typing import Any, NamedTuple, Tuple
 
 import numpy as np
-#import astropy.units as u
-#import astropy.coordinates as coordinates
 import shapely
 from shapely.geometry import Polygon
 from shapely.ops import unary_union
@@ -16,12 +13,10 @@ import triangle as tr
 from marmots.constants import Re
 
 from numba import jit, njit
-#import numba
 
 __all__ = [
     "view_angle",
     "altitude",
-    "decay_view",
     "points_on_earth",
     "horizon_angle",
     "rotate_around_axis",
@@ -654,6 +649,24 @@ def obs_zenith_azimuth(
     azimuth = ((a + np.pi/2) + np.pi) % (2*np.pi) - np.pi
 
     return zenith, azimuth
+
+
+def distance_to_horizon(height: float, radius: float = Re) -> float:
+    """
+    Calculate the distance to the horizon from a given altitude
+    with a given ice thickness.
+    Parameters
+    ----------
+    height: np.ndarray
+        The payload altitude in km.
+    thickness: np.ndarray
+        The ice thickness in km.
+    Returns
+    -------
+    distance: np.ndarray
+        The distance to the payload in km.
+    """
+    return (radius + height) * np.sin(-horizon_angle(height))
 
 
 @njit
