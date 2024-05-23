@@ -9,7 +9,6 @@ import numpy as np
 from interpolation.splines import CGrid, eval_linear, extrap_options
 from numba import njit
 from scipy.interpolate import interpn
-#from igrf12 import igrf
 
 import marmots.geometry as geometry
 from marmots import data_directory
@@ -38,7 +37,7 @@ class EFieldParam():
         decay_azimuth: np.ndarray,
         distance_to_decay: np.ndarray,
         detector_altitude: float,
-        beacon: dict,
+        beacon: np.ndarray,
         dbeacon: np.ndarray,
         freqs: np.ndarray,
         shower_energy: np.ndarray,

@@ -51,7 +51,28 @@ class Detector:
             self.sky_frac = 0.5
 
             self.h_eff = self.effective_height(freqs)
+            
+        elif model == "rhombic":
+            
+            hpol_gain_file = np.load(data_directory + "/beacon/rhombic_antenna_rotated.npz")
+            hpol_freqs = hpol_gain_file["freq_MHz"]
+            hpol_theta = hpol_gain_file["theta_deg"]
+            hpol_az = hpol_gain_file["phi_deg"]
+            self.hpol_gain = hpol_gain_file["gain_dBi"]
+            
+            self.grid = CGrid(hpol_freqs, hpol_theta, hpol_az)
+            
+            self.resistance = 50
+            self.reactance = 0
+            
+            self.Z_L = 50  # Ohms, the impedance at the load
+            self.T_L = 100.0 # Kelvin, noise temperature of the first stage beacon amps
 
+            self.ground_temp = 300 # Kelvin
+            self.sky_frac = 0.5
+
+            self.h_eff = self.effective_height(freqs)
+            
         elif model == "matched":
 
             self.hpol_gain = gain
