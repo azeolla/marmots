@@ -160,6 +160,13 @@ def calculate(
 
             # and check for a trigger
             trigger[in_sight] = SNR > trigger_SNR
+            
+            #cut all decay points that appear above the horizon
+            height = Ag.stations[i]["geodetic"][2]
+
+            above = (np.pi/2) - theta > geometry.horizon_angle(height)
+
+            trigger[in_sight][above] = 0.0
 
             triggers = triggers + trigger
 
