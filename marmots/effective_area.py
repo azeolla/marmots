@@ -8,16 +8,16 @@ import numpy as np
 
 from marmots.constants import Re
 import marmots.geometry as geometry
+import marmots.grammage as grammage
+import marmots.decay as decay
+import marmots.topography as topography
 
 
 def calculate(
     ra: float,
     dec: float,
-    lat: np.ndarray,
-    lon: np.ndarray, 
-    altitude: np.ndarray,
-    orientations: np.ndarray,
-    fov: np.ndarray,
+    totalmesh,
+    BVH,
     tauexit,
     voltage,
     taudecay,
@@ -65,10 +65,10 @@ def calculate(
 
     # compute the geometric area at the desired elevation angles
     Ag = geometry.geometric_area(
-        ra, dec, lat, lon, altitude, maxview, orientations, fov, N=N,min_elev=min_elev
+        ra, dec, totalmesh, maxview, N=N,min_elev=min_elev
         )
 
-    if Ag.emergence.size == 0:
+    if Ag.N == 0:
         geometric = 0
         pexit = 0
         pdet = 0
@@ -76,10 +76,14 @@ def calculate(
         coincidence_frac = np.nan
     else:
 
+        # determine the grammage associated with each exit point
+        # interpolate that grammage into an exit angle so that the tauexit LUT can be used
+        exit_theta = grammage.find_exit_angle(Ag.trials, Ag.axis, totalmesh, BVH)
+        
         # get the exit probability at these elevation angles
         # this is a masked array and will be masked
         # if no tau's exitted at these angles
-        Pexit, Etau = tauexit(90.0 - np.rad2deg(Ag.emergence))
+        Pexit, Etau = tauexit(exit_theta)
 
         # get a random set of decay lengths at these energies
         decay_length = taudecay.sample_range(Etau)
@@ -89,14 +93,16 @@ def calculate(
 
         # location of the decay
         decay_point = Ag.trials + (Ag.axis[:,None] * decay_length).T
+        
+        decay_point_geodetic = topography.to_geodetic(decay_point*1e3)
 
         # and get the altitude at the decay points
-        decay_altitude = geometry.norm(decay_point) - Re
+        decay_altitude = decay_point_geodetic[:,2]/1e3
 
         # get the zenith angle at the exit points
-        exit_zenith = (np.pi/2.0) - Ag.emergence
+        exit_zenith = geometry.exit_zenith(Ag.trials, Ag.axis)
 
-        decay_zenith, decay_azimuth, decay_point_spherical = geometry.decay_zenith_azimuth(decay_point, Ag.axis)
+        decay_zenith, decay_azimuth = geometry.decay_zenith_azimuth(decay_point, Ag.axis)
 
         vrms = detector.Vrms(freqs, antennas)
 
@@ -111,36 +117,40 @@ def calculate(
 
             trigger = np.zeros(Ag.trials.shape[0])
 
-            in_sight = ground_view <= maxview
+            in_view = ground_view <= maxview
+            
+            LoS = decay.line_of_sight(decay_point[in_view], Ag.stations[i]["geocentric"], totalmesh, BVH)
+            
+            in_view[in_view] = LoS
 
-            distance_to_decay = geometry.norm(Ag.stations[i]["geocentric"] - decay_point[in_sight])
+            distance_to_decay = geometry.norm(Ag.stations[i]["geocentric"] - decay_point[in_view])
 
             # calculate the view angle from the decay points
-            decay_view = geometry.decay_view(decay_point[in_sight], Ag.axis, Ag.stations[i]["geocentric"])
+            decay_view = geometry.decay_view(decay_point[in_view], Ag.axis, Ag.stations[i]["geocentric"])
 
             # the zenith and azimuth (measured from East to North) from the station to each decay point
-            theta, phi = geometry.obs_zenith_azimuth(Ag.stations[i], decay_point[in_sight], decay_point_spherical[in_sight])
+            theta, phi = geometry.obs_zenith_azimuth(Ag.stations[i], decay_point[in_view], decay_point_geodetic[in_view])
 
             phi_from_boresight = phi - np.deg2rad(Ag.orientations[i])
 
-            detector_altitude = Ag.stations[i]["geodetic"][2]
+            detector_altitude = Ag.stations[i]["geodetic"][2]/1e3
 
-            dbeacon = geometry.norm(Ag.stations[i]["geocentric"] - Ag.trials[in_sight])
+            dbeacon = geometry.norm(Ag.stations[i]["geocentric"] - Ag.trials[in_view])
 
             # compute the voltage at each of these off-axis angles and at each frequency
             V = voltage(
                 np.rad2deg(decay_view),
-                np.rad2deg(exit_zenith[in_sight]),
-                decay_altitude[in_sight],
-                decay_length[in_sight],
-                np.rad2deg(decay_zenith[in_sight]),
-                np.rad2deg(decay_azimuth[in_sight]),
+                np.rad2deg(exit_zenith[in_view]),
+                decay_altitude[in_view],
+                decay_length[in_view],
+                np.rad2deg(decay_zenith[in_view]),
+                np.rad2deg(decay_azimuth[in_view]),
                 distance_to_decay,
                 detector_altitude,
                 Ag.stations[i]["geodetic"],
                 dbeacon,
                 freqs,
-                Eshower[in_sight],
+                Eshower[in_view],
                 antennas,
                 np.rad2deg(theta),
                 np.rad2deg(phi_from_boresight),
@@ -153,17 +163,7 @@ def calculate(
             SNR = V / vrms
 
             # and check for a trigger
-            trigger[in_sight] = SNR > trigger_SNR
-            
-            height = Ag.stations[i]["geodetic"][2]
-
-            # and the particles that appear to be below the horizon
-            # remember: more negative is below the horizon
-            above = (np.pi/2 - theta) > geometry.horizon_angle(height)
-
-            # if the event is above the horizon, we would not find
-            # them in the search as they would be treated as background
-            trigger[in_sight][above] = 0.0
+            trigger[in_view] = SNR > trigger_SNR
 
             triggers = triggers + trigger
 
