@@ -17,30 +17,24 @@ from numba import jit, njit
 __all__ = [
     "view_angle",
     "altitude",
-    "points_on_earth",
     "horizon_angle",
-    "rotate_around_axis",
-    "find_intersection",
     "cartesian_to_spherical",
     "spherical_to_cartesian",
-    "project",
-    "unproject",
     "geometric_area",
     "obs_zenith_azimuth",
     "decay_zenith_azimuth",
-    "emergence_angle",
     "decay_altitude",
     "triangle_random_point",
     "norm",
+    "exit_zenith"
 ]
 
-# create a named tuple to store our geometry information
 GeometricArea = NamedTuple(
     "GeometricArea",
     [
         ("area", np.ndarray),
+        ("mesh", np.ndarray),
         ("dot", np.ndarray),
-        ("emergence", np.ndarray),
         ("stations", np.ndarray),
         ("trials", np.ndarray),
         ("axis", np.ndarray),
@@ -50,15 +44,12 @@ GeometricArea = NamedTuple(
     ],
 )
 
+
 def geometric_area(
     ra_deg: float,
     dec_deg: float,
-    lat_deg: np.ndarray,
-    lon_deg: np.ndarray, 
-    height: np.ndarray,
+    TotalArea: NamedTuple,
     maxview: float,
-    orientations: np.ndarray,
-    fov: np.ndarray,
     N: int = 10_000,
     min_elev: float = np.deg2rad(-30),
 ):
@@ -94,57 +85,69 @@ def geometric_area(
 
     ra = np.deg2rad(ra_deg)
     dec = np.deg2rad(dec_deg)
-    lat = np.deg2rad(lat_deg)
-    lon = np.deg2rad(lon_deg)
 
-    alt = altitude(ra, dec, lat, lon)
+    alt = altitude(ra, dec, np.deg2rad(TotalArea.stations_geodetic[:,0]), np.deg2rad(TotalArea.stations_geodetic[:,1]))
+    
+    # check to see that we're looking above the minimum elevation angle
+    above_cut = alt >= min_elev
+    
+    stations_geocentric = TotalArea.stations_geocentric[above_cut]
+    stations_geodetic = TotalArea.stations_geodetic[above_cut]
+    orientations = TotalArea.orientations[above_cut]
+    fov = TotalArea.fov[above_cut]
 
     theta = np.pi/2 - dec
     phi = ra  
 
     # the particle axis
     axis = -spherical_to_cartesian(theta, phi, r=1.0)[0]
-
-    # generate ~N random points in the corresponding segment
-    trials, A0, stations, orientations, fov = points_on_earth(lat, lon, height, alt, axis, maxview, orientations, fov, N, min_elev)
     
-    events_generated = trials.shape[0]
+    in_view = np.zeros(TotalArea.centroids.shape[0], dtype=bool)
+    valid = np.zeros(stations_geocentric.shape[0], dtype=bool)
+    for i in range(stations_geocentric.shape[0]):
+        view = view_angle(TotalArea.centroids, stations_geocentric[i], axis) <= maxview 
+        in_view[view] = 1
+        valid[i] = np.sum(view) > 0
     
-    if (events_generated == 0):
+    surface = TotalArea.triangles[in_view]
+    
+    stations_geocentric = stations_geocentric[valid]
+    stations_geodetic = stations_geodetic[valid]
+    orientations = orientations[valid]
+    fov = fov[valid]
+    
+    if (surface.shape[0] == 0):
 
-        return GeometricArea(A0, np.array([]), np.array([]), np.array([]), np.array([]), axis, 0, np.array([]), np.array([]))
+        return GeometricArea(0, np.array([]), np.array([]), np.array([]), np.array([]), axis, 0, np.array([]), np.array([]))
 
     else:
-
-        '''
-        in_view = np.zeros(events_generated)
-        for i in range(stations["geocentric"].shape[0]):
-            in_view += view_angle(trials, stations["geocentric"][i], axis) <= maxview 
-            
-        trials = trials[in_view > 0]
-        '''
+        
+        A, normals = area(surface)
+        A0 = np.sum(A)
 
         # compute the dot product of each trial point with the axis vector
-        dot = np.dot(normalize(trials), axis)
+        tdot = np.dot(normals, axis)
+        
+        idx = np.random.choice(np.arange(surface.shape[0]), p=A/np.sum(A), size=N) # randomly pick triangles weighed by their area 
+        idx, counts = np.unique(idx, return_counts = True) # count how many times each triangle was picked
+        trials = np.concatenate(list(map(triangle_random_point, surface[idx], counts))) # and sample that many points from each triangle
+        dot = np.repeat(tdot[idx], counts)
 
         # and mask those trials whose dot product < 0 - since trials are on
         # the surface of the Earth, this would require the RF to propagate
         # through the Earth which is going to render the event undetectable.
-        valid = dot > 0
+        out_earth = dot > 0
 
         # mask the dot products and view angle
-        dot = dot[valid]
-            
-        # compute the average emergence angle for this elevation
-        emergence = np.pi/2.0 - np.arccos(dot) if dot.size else np.asarray([])
+        dot = dot[out_earth]
+        
+        stations = {}
+        for j in range(stations_geocentric.shape[0]):
+            stations[j] = {"geocentric": stations_geocentric[j], 
+                            "geodetic": stations_geodetic[j]}
                    
         # and we are done
-        return GeometricArea(A0, dot, emergence, stations, trials[valid], axis, events_generated, orientations, fov)
-
-
-def altitude(ra, dec, lat, lon):
-    alt = np.arcsin( np.sin(dec)*np.sin(lat) + np.cos(dec)*np.cos(lat)*np.cos(lon-ra) )
-    return alt
+        return GeometricArea(A0, surface, dot, stations, trials[out_earth], axis, trials.shape[0], orientations, fov)
 
 
 def decay_view(
@@ -154,6 +157,11 @@ def decay_view(
     d = station - decay_point
     
     return np.arccos(np.dot(normalize(d), axis)) 
+
+
+def altitude(ra, dec, lat, lon):
+    alt = np.arcsin( np.sin(dec)*np.sin(lat) + np.cos(dec)*np.cos(lat)*np.cos(lon-ra) )
+    return alt
 
 
 def view_angle(point: np.ndarray, obspoint: np.ndarray, axis: np.ndarray) -> np.ndarray:
@@ -187,160 +195,6 @@ def view_angle(point: np.ndarray, obspoint: np.ndarray, axis: np.ndarray) -> np.
     return np.arccos(np.dot(normalize(view), axis))
 
 
-def points_on_earth(
-    lat: np.ndarray, 
-    lon: np.ndarray, 
-    height: np.ndarray, 
-    alt: np.ndarray,  
-    axis: np.ndarray, 
-    maxview: float,
-    orientations: np.ndarray,
-    fov: np.ndarray,
-    N: int = 10_000,
-    min_elev: float = np.deg2rad(-30),
-) -> np.ndarray:
-    """
-    Sample `N` 3D vectors from the patch on the Earth centered at a given
-    pyaload and elevation angle with a maximum view angle of `maxview`.
-
-    Parameters
-    ----------
-    height: float
-        The height of the observation point in km.
-    elev: float
-        The payload elevation angle in radians (-ve below the horizon)
-    phi: float
-        The payload azimuth angle in radians.
-    view: float
-        The maximum view angle in radians.
-    N: int
-        The number of sample points to generater.
-    ice: float
-        The constant thickness of the ice (km).
-
-    Returns
-    -------
-    points: np.ndarray
-        A (N, 3) ndarray containing the generated random points.
-    area: float
-        The trapezoidal surface area sampled from (in km^2).
-    """
-
-    lowest_angle = alt - maxview
-
-    horizon = horizon_angle(height, radius=Re)
-
-    # if lowest_angle is above the horizon, this station doesn't view the Earth at all in this direction
-    # also, if we're looking below our minimum elevation angle cut, cut it
-    invalid = (lowest_angle > horizon) | (alt < min_elev)
-
-    # if no stations view the Earth, exit now
-    if (np.sum(invalid) == lat.size):
-        trials = np.array([])
-        A0 = 0 
-        stations = np.array([])
-
-    else:
-        
-        # save the stations that do have the Earth in view
-        station_theta = np.pi/2 - lat[~invalid]
-        station_phi = lon[~invalid]
-        station_height = height[~invalid]
-        
-        stations = {}
-        for i in range(station_theta.size):
-            stations[i] = {"geocentric": spherical_to_cartesian(station_theta[i], station_phi[i], Re+station_height[i])[0], 
-                            "geodetic": np.array([np.rad2deg(lat[~invalid][i]), np.rad2deg(lon[~invalid][i]), height[~invalid][i]]).T}
-        orientations = orientations[~invalid]
-        fov = fov[~invalid]
-        
-        
-        z = np.array([0,0,1])
-        perp = np.cross(axis, z) # axis perpindicular to the shower axis
-        v = rotate_around_axis(axis, perp/np.linalg.norm(perp), maxview) # the shower axis rotated by maxview
-        
-        theta = np.deg2rad(np.arange(0,360,15))
-        vectors = np.empty((theta.size,3))
-        for i in range(theta.size):
-               vectors[i] = -rotate_around_axis(v, axis, theta[i]) # a cone of vectors around the shower axis
-        
-        polygons = []
-        for i in range(len(stations)):
-            # from the vantage point of each station, see where our cone of vectors intersect the Earth
-            points = cartesian_to_spherical(np.array([find_intersection(vec, stations[i]["geocentric"]) for vec in vectors]))
-
-            # identify areas that cross on the antimeridian. These points need to be moved all to the same side
-            s = np.sum(points[:,2] > 0)
-            wrapped_over_antimeridian = (s != 0) & (s != points[:,2].size) & (np.mean(abs(points[:,2])) > np.pi/2)
-            if wrapped_over_antimeridian:
-                points[:,2][points[:,2] < 0] += 2*np.pi
-    
-            # sinusoidal projection allows us to work in 2D, while conserving the shape's area
-            x,y = project(points[:,0], 90 - np.rad2deg(points[:,1]), np.rad2deg(points[:,2]))
-
-            # this ensures that the vertices are in order
-            pp = list(zip(x,y))
-            cent=(np.sum([p[0] for p in pp])/len(pp),np.sum([p[1] for p in pp])/len(pp))
-            # sort by polar angle
-            pp.sort(key=lambda p: np.arctan2(p[1]-cent[1],p[0]-cent[0]))
-
-            polygons.append(Polygon(pp))
-
-        
-        # the union of all the areas
-        multi = unary_union(polygons)
-
-        # the union area
-        A0 = multi.area
-
-        # triangulate the union area in order to randomly sample points uniformly
-        triangles = []
-        if type(multi) == shapely.geometry.multipolygon.MultiPolygon:
-            for i in range(len(multi.geoms)):
-                vertices = np.array(multi.geoms[i].exterior.coords)[:-1]
-
-                start = np.arange(0, vertices.shape[0])
-                end = np.roll(start,-1)
-                segments = np.column_stack((start,end))
-
-                shape = dict(vertices = vertices, segments = segments)
-
-                tri = tr.triangulate(shape, 'p')
-
-                triangles.append(tri['vertices'][tri['triangles']])
-        else:
-            vertices = np.array(multi.exterior.coords)[:-1]
-
-            start = np.arange(0, vertices.shape[0])
-            end = np.roll(start,-1)
-            segments = np.column_stack((start,end))
-
-            shape = dict(vertices = vertices, segments = segments)
-
-            tri = tr.triangulate(shape, 'p')
-
-            triangles.append(tri['vertices'][tri['triangles']])
-
-        triangles = np.concatenate(triangles)
-        
-        # find the area of each triangle
-        areas = np.empty(triangles.shape[0])
-        for i in range(triangles.shape[0]):
-            areas[i] = Polygon(triangles[i]).area
-            
-        idx = np.random.choice(np.arange(triangles.shape[0]), p=areas/np.sum(areas), size=N) # randomly pick triangles weighed by their area 
-        idx, counts = np.unique(idx, return_counts = True) # count how many times each triangle was picked
-        proj_trials = np.concatenate(list(map(triangle_random_point, triangles[idx], counts))) # and sample that many points from each triangle 
-        
-        # reverse sinusoidal projection
-        trials_spherical = unproject(proj_trials)
-
-        trials = spherical_to_cartesian(trials_spherical[:,1], trials_spherical[:,2], trials_spherical[:,0])
-
-    # and return the trials, area, and valid stations
-    return trials, A0, stations, orientations, fov
-
-
 def triangle_random_point(triangle, size):
     r1 = np.random.random(size)
     r2 = np.random.random(size)
@@ -348,49 +202,6 @@ def triangle_random_point(triangle, size):
     P = (1 - np.sqrt(r1)).reshape(-1,1) * triangle[0] + (np.sqrt(r1) * (1 - r2)).reshape(-1,1) * triangle[1] + (np.sqrt(r1) * r2).reshape(-1,1) * triangle[2]
     
     return P
-
-
-def rotate_around_axis(vector, axis, theta):
-    R = np.empty((3,3))
-    R[0] = np.array([np.cos(theta)+axis[0]**2 * (1-np.cos(theta)), axis[0]*axis[1]*(1-np.cos(theta)) - axis[2]*np.sin(theta),axis[0]*axis[2]*(1-np.cos(theta)) + axis[1]*np.sin(theta)])
-    R[1] = np.array([axis[1]*axis[0]*(1-np.cos(theta)) + axis[2]*np.sin(theta),np.cos(theta)+axis[1]**2 * (1-np.cos(theta)),axis[1]*axis[2]*(1-np.cos(theta)) - axis[0]*np.sin(theta)])
-    R[2] = np.array([axis[2]*axis[0]*(1-np.cos(theta)) - axis[1]*np.sin(theta),axis[2]*axis[1]*(1-np.cos(theta)) + axis[0]*np.sin(theta),np.cos(theta)+axis[2]**2 * (1-np.cos(theta))])
-    
-    return R @ vector
-
-
-def find_intersection(vector, station):
-    
-    #https://diegoinacio.github.io/computer-vision-notebooks-page/pages/ray-intersection_sphere.html
-    
-    #note: this assumes that the vector is pointed toward the source
-    
-    t = np.dot(station, vector)
-    p = station - vector*t
-    d = np.linalg.norm(p)
-
-    height = np.linalg.norm(station)
-    horizon_elev = -np.arccos(Re / height) # the angle from horizontal to the horizon from the station
-    vec_elev = -np.arccos(np.dot(station/height,vector)) + np.pi/2 # the angle from horizontal for the observation vector
-
-    if(vec_elev > horizon_elev):
-        # if the vector points above the horizon, rotate it towards the Earth such that it hits the horizon
-        axis = np.cross(station/height, vector) # axis perpendicular to the station vector and observation vector
-        horizon_vec = rotate_around_axis(vector, axis, -(horizon_elev-vec_elev)) # rotate the observation vector such that it is pointed at the horizon
-        new_t = np.dot(station, horizon_vec)
-        new_p = station - horizon_vec*new_t
-        Ps = new_p
-
-    elif(vec_elev == horizon_elev):
-        # this happens when the vector is tangent to the Earth
-        Ps = p
-
-    else:
-        # find the first point of intersection when the vector passes through the Earth
-        i = np.sqrt(Re**2 - d**2)
-        Ps = station - vector*(t + i)
-        
-    return Ps
 
 
 def cartesian_to_spherical(point):
@@ -401,26 +212,6 @@ def cartesian_to_spherical(point):
     spherical[:,1] = np.arccos(point[:,2]/norm(point))
     spherical[:,2] = np.arctan2(point[:,1], point[:,0])
 
-    return spherical
-
-
-def project(radius, latitude, longitude):
-    lat_dist = np.pi * radius / 180
-    y = latitude * lat_dist 
-    x = longitude * lat_dist * np.cos(np.deg2rad(latitude))
-    return x, y
-
-
-def unproject(point):
-    spherical = np.empty((point.shape[0], 3))
-    
-    lat_dist = np.pi * Re/180
-    latitude = point[:,1]/lat_dist
-    longitude = point[:,0]/lat_dist/np.cos(np.deg2rad(latitude))
-    
-    spherical[:,0] = Re
-    spherical[:,1] = np.deg2rad(90 - latitude)
-    spherical[:,2] = np.deg2rad(longitude)
     return spherical
 
 
@@ -442,58 +233,6 @@ def horizon_angle(height: np.ndarray, radius: float = Re) -> np.ndarray:
        The horizon angle (in radians).
     """
     return -np.arccos((radius) / (radius + height))
-
-
-def emergence_angle(
-    height: np.ndarray, elev: np.ndarray, ice: float = 0.0
-) -> np.ndarray:
-    """
-    Given a viewing height (in km) and a set of payload elevation angles (in
-    radians), compute the emergence angle from the surface intersection of the
-    elevation angle looking at the payload.
-
-    See:
-        https://math.stackexchange.com/questions/209271/
-        given-an-altitude-and-a-viewing-angle-how-do-i-determine-the-distance-of-the-vie
-
-    for a diagram and derivation of the formula used in this implementation.
-
-    Parameters
-    ----------
-    height: np.ndarray
-       The height (in km) of each viewing position.
-    elev: np.ndarray
-       The payload elevation angle (in radians).
-    ice: float
-       The thickness of the ice [km].
-
-    Returns
-    -------
-    emergence_angle: np.ndarray
-       The emergence angle (in radians)
-    """
-
-    # make sure that elev, height are atleast 1D
-    elev = np.atleast_1d(elev)
-    height = np.atleast_1d(height)
-
-    # compute the 'theta' in the reference
-    theta = np.pi / 2.0 + elev
-
-    # compute sin(phi)
-    sphi = ((Re + height) / (Re + ice)) * np.sin(theta)
-
-    # create an array to store the result
-    emerg_angle: np.ndarray = np.zeros_like(sphi)
-
-    # if sphi < 1., arcsin is defined and we intersect the Earth
-    intersect = np.abs(sphi) <= 1.0
-
-    # and for points that intersect, we overwrite with the true earth angle
-    emerg_angle[intersect] = np.pi / 2.0 - np.arcsin(sphi[intersect])
-
-    # and we are done
-    return emerg_angle
 
 
 def spherical_to_cartesian(
@@ -534,6 +273,14 @@ def spherical_to_cartesian(
     return cartesian
 
 
+def exit_zenith(exit_point: np.ndarray, axis: np.ndarray):
+    
+    dot = np.dot(normalize(exit_point), axis)
+    zenith = np.arccos(dot)
+    
+    return zenith
+
+
 def decay_zenith_azimuth(decay_point: np.ndarray, axis: np.ndarray) -> np.ndarray:
     """
     Returns the zenith angle and azimuth angle (measured from East to North) of a shower as measured at the decay point
@@ -566,7 +313,7 @@ def decay_zenith_azimuth(decay_point: np.ndarray, axis: np.ndarray) -> np.ndarra
     
     azimuth = a + np.pi/2
 
-    return zenith, azimuth, decay_point_spherical
+    return zenith, azimuth
 
 
 def decay_altitude(
@@ -641,8 +388,11 @@ def obs_zenith_azimuth(
     lat = np.deg2rad(station['geodetic'][0])
     lon = np.deg2rad(station['geodetic'][1])
     
-    y = np.sin(lon - decay_point_spherical[:,2]) * np.cos(np.pi/2 - decay_point_spherical[:,1])
-    x = np.cos(lat) * np.sin(np.pi/2 - decay_point_spherical[:,1]) - np.sin(lat) * np.cos(np.pi/2 - decay_point_spherical[:,1]) * np.cos(lon - decay_point_spherical[:,2])
+    dlat = np.deg2rad(decay_point_spherical[:,0])
+    dlon = np.deg2rad(decay_point_spherical[:,1])
+    
+    y = np.sin(lon - dlon) * np.cos(dlat)
+    x = np.cos(lat) * np.sin(dlat) - np.sin(lat) * np.cos(dlat) * np.cos(lon - dlon)
     a = np.arctan2(y,x)
     
     # first add pi/2 so that azimuth is measured from East instead of North. Then wrap azimuth between [-pi,pi)
@@ -680,3 +430,17 @@ def normalize(vec: np.ndarray):
     # normalize along axis=1
     norm = np.sqrt(vec[:,0]**2 +vec[:,1]**2 + vec[:,2]**2)
     return vec/np.expand_dims(norm, 1)
+
+
+def normal(triangles):
+    # The cross product of two sides is a normal vector
+    return np.cross(triangles[:,1] - triangles[:,0], 
+                    triangles[:,2] - triangles[:,0], axis=1)
+
+def area(triangles):
+    # The norm of the cross product of two sides is twice the area
+    n = normal(triangles)
+    mag = norm(n)
+    area = mag/2
+    
+    return area, n/mag[:, None]
