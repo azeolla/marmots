@@ -16,4 +16,4 @@ def line_of_sight(decay_points, station, TotalArea, BVH):
     for i in range(decay_points.shape[0]):
         local_ints = mesh.intersect_bvh_with_segment(BVH, local_station, local_points[i])
         ints.append(local_ints)
-    return np.array(ints)
+    return ~np.array(ints).astype(bool)

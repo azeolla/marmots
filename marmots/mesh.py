@@ -171,7 +171,7 @@ def triangle_segment_intersections(segment_start, segment_end, triangles):
     t = np.sum(AO * N, axis=1) * invdet
 
     t1 = np.abs(det) >= 1e-6
-    t2 = t > 0.1 # this ensures that we don't count intersections at the station
+    t2 = t > 0.5 # this ensures that we don't count intersections at the station
     t3 = u >= 0.0
     t4 = v >= 0.0
     t5 = (u + v) <= 1.0
