@@ -46,6 +46,22 @@ def to_geodetic(points):
     latlon = np.array(xyz2latlon.transform(points[:,0], points[:,1], points[:,2])).T
     return latlon
 
+def geocentric2local(points, origin):
+    
+    new = points - origin
+    
+    llz = to_geodetic(np.array([origin])*1e3)[0]
+
+    R1 =  rotation_matrix(np.array([1,0,0]), -np.deg2rad(90-llz[0]))
+    R2 =  rotation_matrix(np.array([0,0,1]), -np.deg2rad(90+llz[1]))
+    
+    R3 = R1@R2
+
+    v = new.reshape(-1, 3).T
+    enu = (R3 @ v).T.reshape(new.shape)
+    
+    return enu
+
 def project(points):
     x, y = sinusoidal.transform(points[:,0], points[:,1])
     return x, y
@@ -53,6 +69,14 @@ def project(points):
 def unproject(x, y):
     lat, lon = inverse_sinusoidal.transform(x, y)
     return lat, lon
+
+def rotation_matrix(axis, theta):
+    R = np.empty((3,3))
+    R[0] = np.array([np.cos(theta)+axis[0]**2 * (1-np.cos(theta)), axis[0]*axis[1]*(1-np.cos(theta)) - axis[2]*np.sin(theta),axis[0]*axis[2]*(1-np.cos(theta)) + axis[1]*np.sin(theta)])
+    R[1] = np.array([axis[1]*axis[0]*(1-np.cos(theta)) + axis[2]*np.sin(theta),np.cos(theta)+axis[1]**2 * (1-np.cos(theta)),axis[1]*axis[2]*(1-np.cos(theta)) - axis[0]*np.sin(theta)])
+    R[2] = np.array([axis[2]*axis[0]*(1-np.cos(theta)) - axis[1]*np.sin(theta),axis[2]*axis[1]*(1-np.cos(theta)) + axis[0]*np.sin(theta),np.cos(theta)+axis[2]**2 * (1-np.cos(theta))])
+    
+    return R 
 
 def lat_lon_to_pixel(latitudes, longitudes, dataset):
     """
@@ -92,9 +116,9 @@ def get_elevation(latitudes, longitudes):
         else:
             lat = 'S' + str(abs(latlon[i][0]))
         if latlon[i][1] >= 0:
-            lon = 'E' + str(abs(latlon[i][1]))
+            lon = 'E' + str(abs(latlon[i][1])).zfill(3)
         else:
-            lon = 'W' + str(abs(latlon[i][1]))
+            lon = 'W' + str(abs(latlon[i][1])).zfill(3)
             
         file_path = f"/data2/beacon/srtm30m/{lat}{lon}.hgt"
         dataset = rasterio.open(file_path)
@@ -139,27 +163,32 @@ def visibile_horizon_mesh(lat, lon, height, orientations, fov, distance_beyond=2
             vectors[j] = rotate_around_axis(orientation, stat, np.deg2rad(angles[j]))
 
         # Find the elevation at 1 km intervals along each vector
-        dist = np.arange(1,600,1)*1e3
+        dist = np.arange(1,375,1)*1e3
         llz = np.array([to_geodetic((stations_geocentric[i] + dist[:,None]*vec)) for vec in normalize(vectors)])
         z = get_elevation(np.concatenate(llz)[:,0], np.concatenate(llz)[:,1]).reshape(llz.shape[0:2])
-        
+
         points = np.zeros((angles.size + 3,2))
         points[0] = stations_geodetic[i][0:2] # the location of the station
 
         surface = np.array([llz[0][:,0], llz[0][:,1], z[0]]).T
-        xyz = to_geocentric(surface[:,0], surface[:,1], surface[:,2]) - stations_geocentric[i]
-        R = np.sqrt(xyz[:,0]**2 + xyz[:,1]**2)
+        xyz = to_geocentric(surface[:,0], surface[:,1], surface[:,2]) 
+        local = geocentric2local(xyz, stations_geocentric[i])
+        R = np.sqrt(local[:,0]**2 + local[:,1]**2)
+
         # the visible horizon is the max of xyz/R
         # we extend some distance beyond the visible horizon to allow taus to pass through terrain
-        points[1] = surface[int(np.argmax(xyz[:,2]/R)/2)+distance_beyond][0:2] # half way to the horizon at the first edge
-        points[2] = surface[np.argmax(xyz[:,2]/R)+distance_beyond][0:2] # the horizon at the first edge
+        idx = np.clip(np.argmax(local[:,2]/R)+distance_beyond, 0, dist.size-1)
+        points[1] = surface[int(idx/2)][0:2] # half way to the horizon at the first edge
+        points[2] = surface[int(idx)][0:2] # the horizon at the first edge
         # do this for each vector
         for k in range(1,vectors.shape[0]):
             surface = np.array([llz[k][:,0], llz[k][:,1], z[k]]).T
-            xyz = to_geocentric(surface[:,0], surface[:,1], surface[:,2]) - stations_geocentric[i]
-            R = np.sqrt(xyz[:,0]**2 + xyz[:,1]**2)
-            points[k+2] = surface[np.argmax(xyz[:,2]/R)+distance_beyond][0:2]
-        points[-1] = surface[int(np.argmax(xyz[:,2]/R)/2)+distance_beyond][0:2] # half way to horizon at the second edge
+            xyz = to_geocentric(surface[:,0], surface[:,1], surface[:,2]) 
+            local = geocentric2local(xyz, stations_geocentric[i])
+            R = np.sqrt(local[:,0]**2 + local[:,1]**2)
+            idx = np.clip(np.argmax(local[:,2]/R)+distance_beyond, 0, dist.size-1)
+            points[k+2] = surface[int(idx)][0:2]
+        points[-1] = surface[int(idx/2)][0:2] # half way to horizon at the second edge
 
         # identify areas that cross on the antimeridian. These points need to be moved all to the same side
         s = np.sum(points[:,1] > 0)

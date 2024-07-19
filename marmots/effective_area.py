@@ -122,6 +122,9 @@ def calculate(
             LoS = decay.line_of_sight(decay_point[in_view], Ag.stations[i]["geocentric"], totalmesh, BVH)
             
             in_view[in_view] = LoS
+            
+            if np.sum(in_view) == 0:
+                continue
 
             distance_to_decay = geometry.norm(Ag.stations[i]["geocentric"] - decay_point[in_view])
 
