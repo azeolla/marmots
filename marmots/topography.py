@@ -144,7 +144,7 @@ def normalize(vec: np.ndarray):
     norm = np.sqrt(vec[:,0]**2 +vec[:,1]**2 + vec[:,2]**2)
     return vec/np.expand_dims(norm, 1)
 
-def visibile_horizon_mesh(lat, lon, height, orientations, fov, distance_beyond=200):
+def visibile_horizon_mesh(lat, lon, height, orientations, fov, distance_beyond=100):
 
     stations_geocentric = to_geocentric(lat, lon, height*1e3)
     stations_geodetic = np.array([lat, lon, height*1e3]).T
