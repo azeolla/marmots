@@ -65,7 +65,7 @@ class Detector:
             self.resistance = np.interp(freqs, hpol_freqs, hpol_gain_file["Rant"])
             self.reactance = np.interp(freqs, hpol_freqs, hpol_gain_file["Xant"])
             
-            self.Z_L = 200  # Ohms, the impedance at the load
+            self.Z_L = 600  # Ohms, the impedance at the load
             self.T_L = 100.0 # Kelvin, noise temperature of the first stage beacon amps
 
             self.ground_temp = 300 # Kelvin
