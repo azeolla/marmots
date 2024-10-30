@@ -91,7 +91,7 @@ def calculate(
         decay_point = Ag.trials + (Ag.axis[:,None] * decay_length).T
 
         # and get the altitude at the decay points
-        decay_altitude = geometry.norm(decay_point) - Re
+        decay_altitude = geometry.norm(decay_point) - Re 
 
         # get the zenith angle at the exit points
         exit_zenith = (np.pi/2.0) - Ag.emergence
@@ -123,7 +123,7 @@ def calculate(
 
             phi_from_boresight = phi - np.deg2rad(Ag.orientations[i])
 
-            detector_altitude = Ag.stations[i]["geodetic"][2]
+            detector_altitude = Ag.stations[i]["geodetic"][2] 
 
             dbeacon = geometry.norm(Ag.stations[i]["geocentric"] - Ag.trials[in_sight])
 

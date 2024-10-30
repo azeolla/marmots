@@ -96,7 +96,7 @@ class EFieldParam():
         phi = phi[~cut]
         distance_decay_km = distance_to_decay[~cut]
 
-        alt_idx = np.abs(self.altitudes - detector_altitude).argmin()
+        alt_idx = np.where(self.altitudes >= detector_altitude)[0][0]
          
         # interpolate to find the distance from decay to detector in ZHAireS
         sim_distance_decay_km = distance_interp(
