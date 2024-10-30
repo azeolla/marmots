@@ -84,7 +84,7 @@ class Detector:
             self.T_L = 100.0 # Kelvin, noise temperature of the first stage beacon amps
 
             self.ground_temp = 300 # Kelvin
-            self.sky_frac = 0.5
+            self.sky_frac = 0.3
 
             self.h_eff = self.effective_height(freqs)
 
