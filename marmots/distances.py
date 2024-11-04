@@ -5,9 +5,15 @@ the tau point source effective area.
 from typing import Any, Union
 
 import numpy as np
+import astropy.coordinates as coordinates
+import astropy.units as u
 
+#import marmots.antenna as antenna
 from marmots.constants import Re
+
+# import marmots.events as events
 import marmots.geometry as geometry
+#import time
 
 
 def calculate(
@@ -18,13 +24,13 @@ def calculate(
     altitude: np.ndarray,
     orientations: np.ndarray,
     fov: np.ndarray,
-    antennas: np.ndarray,
     tauexit,
     voltage,
     taudecay,
     detector,
     maxview: float = np.radians(3.0),
     N: Union[np.ndarray, int] = 1_000_000,
+    antennas: int = 4,
     freqs: np.ndarray = np.arange(30,80,10)+5,
     trigger_SNR: float = 5.0,
     min_elev: float = np.deg2rad(-30),
@@ -65,15 +71,11 @@ def calculate(
 
     # compute the geometric area at the desired elevation angles
     Ag = geometry.geometric_area(
-        ra, dec, lat, lon, altitude, maxview, orientations, fov, antennas, N=N,min_elev=min_elev
+        ra, dec, lat, lon, altitude, maxview, orientations, fov, N=N,min_elev=min_elev
         )
 
     if Ag.emergence.size == 0:
-        geometric = 0
-        pexit = 0
-        pdet = 0
-        effective_area = 0
-        coincidence_frac = np.nan
+        distances = []
     else:
 
         # get the exit probability at these elevation angles
@@ -98,12 +100,11 @@ def calculate(
 
         decay_zenith, decay_azimuth, decay_point_spherical = geometry.decay_zenith_azimuth(decay_point, Ag.axis)
 
-        vrms = detector.Vrms(freqs)
-        
-        n_stations = len(Ag.stations)
+        vrms = detector.Vrms(freqs, antennas)
 
-        triggers = np.zeros(Ag.trials.shape[0])
+        n_stations = len(Ag.stations)        
 
+        distances = []
         # iterate over stations
         for i in range(n_stations):
             
@@ -121,7 +122,7 @@ def calculate(
             # the zenith and azimuth (measured from East to North) from the station to each decay point
             theta, phi = geometry.obs_zenith_azimuth(Ag.stations[i], decay_point[in_sight], decay_point_spherical[in_sight])
 
-            phi_from_boresight = phi - np.deg2rad(Ag.orientations[i])
+            phi_from_boresight = phi - Ag.orientations[i]
 
             detector_altitude = Ag.stations[i]["geodetic"][2]
 
@@ -141,43 +142,31 @@ def calculate(
                 dbeacon,
                 freqs,
                 Eshower[in_sight],
+                antennas,
                 np.rad2deg(theta),
                 np.rad2deg(phi_from_boresight),
                 Ag.fov[i],
                 detector,
             )
+            
 
             # calculate the SNR
-            SNR = np.sqrt(Ag.antennas[i]) * (V / vrms)
+            SNR = V / vrms
 
             # and check for a trigger
             trigger[in_sight] = SNR > trigger_SNR
             
+            #cut all decay points that appear above the horizon
             height = Ag.stations[i]["geodetic"][2]
 
-            # and the particles that appear to be below the horizon
-            # remember: more negative is below the horizon
-            above = (np.pi/2 - theta) > geometry.horizon_angle(height)
+            above = (np.pi/2) - theta > geometry.horizon_angle(height)
 
-            # if the event is above the horizon, we would not find
-            # them in the search as they would be treated as background
             trigger[in_sight][above] = 0.0
 
-            triggers = triggers + trigger
+            distances.append(dbeacon[trigger[in_sight].astype(bool)])
 
-        coincidences = np.sum(triggers > 1)
-        Pdet = triggers > 0
-        num_triggers = np.sum(Pdet)
-
-        # and save the various effective area coefficients at these angles
-        geometric = (Ag.area * np.sum(Ag.dot)) / Ag.N
-        pexit = np.mean(Pexit)
-        pdet = np.mean(Pdet)
-        effective_area = np.sum(Ag.area * Ag.dot * Pexit * Pdet) / Ag.N
-        with np.errstate(divide='ignore', invalid='ignore'):
-            coincidence_frac = coincidences/num_triggers
-
+        distances = np.concatenate(distances)
     #end = time.time()
     # and now return the computed parameters
-    return np.array([geometric, pexit, pdet, effective_area, coincidence_frac])
+    return distances
     #return end - begin

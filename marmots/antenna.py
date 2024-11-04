@@ -54,7 +54,7 @@ class Detector:
             
         elif model == "rhombic":
             
-            hpol_gain_file = np.load(data_directory + "/beacon/rhombic_antenna_rotated.npz")
+            hpol_gain_file = np.load(data_directory + "/beacon/rhombic_antenna_vpol_rotated.npz")
             hpol_freqs = hpol_gain_file["freq_MHz"]
             hpol_theta = hpol_gain_file["theta_deg"]
             hpol_az = hpol_gain_file["phi_deg"]
@@ -84,7 +84,7 @@ class Detector:
             self.T_L = 100.0 # Kelvin, noise temperature of the first stage beacon amps
 
             self.ground_temp = 300 # Kelvin
-            self.sky_frac = 0.5
+            self.sky_frac = 0.3
 
             self.h_eff = self.effective_height(freqs)
 
@@ -142,7 +142,7 @@ class Detector:
         return np.sqrt(h_eff)
 
     def voltage_from_field(
-        self, Epeak: np.ndarray, freqs: np.ndarray, antennas: int, theta: np.ndarray, phi: np.ndarray
+        self, Epeak: np.ndarray, freqs: np.ndarray, theta: np.ndarray, phi: np.ndarray
     ) -> np.ndarray:
         """
         Given a peak electric field (in V/m), calculate the voltage seen
@@ -173,7 +173,7 @@ class Detector:
 
             G = (10 ** (D / 10.0))
 
-            x = antennas * self.h_eff * Epeak.T
+            x = self.h_eff * Epeak.T
             
             out = np.sum(x * np.sqrt(G.T), axis=1)
         
@@ -181,13 +181,13 @@ class Detector:
 
             G = (10 ** (self.hpol_gain / 10.0))
 
-            x = antennas * self.h_eff * Epeak.T
+            x = self.h_eff * Epeak.T
             
             out = np.sum(x * np.sqrt(G), axis=1)
 
         return out
 
-    def Vrms(self, freqs: np.ndarray, antennas: int):
+    def Vrms(self, freqs: np.ndarray):
         """
         The RMS voltage created by galactic, extragalactic, ground, and system noise.
         """
@@ -213,7 +213,7 @@ class Detector:
         noise[np.isnan(noise)] = 0 # replace all NaNs with 0
         df = freqs[1]-freqs[0]
         
-        return np.sqrt(np.sum(antennas*df*noise))
+        return np.sqrt(np.sum(df*noise))
 
 
 @njit

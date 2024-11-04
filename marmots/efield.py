@@ -41,7 +41,6 @@ class EFieldParam():
         dbeacon: np.ndarray,
         freqs: np.ndarray,
         shower_energy: np.ndarray,
-        antennas: int,
         theta: np.ndarray,
         phi: np.ndarray,
         FoV: float,
@@ -67,8 +66,6 @@ class EFieldParam():
             The energy of the shower.
         gain: float
             The peak gain [dBi].
-        antennas: int
-            The number of antennas.
 
         Returns
         -------
@@ -95,8 +92,8 @@ class EFieldParam():
         theta = theta[~cut]
         phi = phi[~cut]
         distance_decay_km = distance_to_decay[~cut]
-
-        alt_idx = np.abs(self.altitudes - detector_altitude).argmin()
+        
+        alt_idx = np.where(self.altitudes >= detector_altitude)[0][0]
          
         # interpolate to find the distance from decay to detector in ZHAireS
         sim_distance_decay_km = distance_interp(
@@ -127,7 +124,6 @@ class EFieldParam():
         voltage[~cut] = detector.voltage_from_field(
             efields,
             freqs,
-            antennas,
             theta,
             (phi+360) % 360,
         )
