@@ -15,12 +15,6 @@ if __name__ == "__main__":
         help="The energy of the primary neutrino [EeV].",
     )
     parser.add_argument(
-        "--antennas",
-        type=int,
-        default=10,
-        help="The number of antennas per station (10)."
-    )
-    parser.add_argument(
         "--stations",
         type=str,
         default=None,
@@ -66,7 +60,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model",
         type=str,
-        choices=['prototype', 'matched'],
+        choices=['prototype', 'matched', 'rhombic'],
         default="prototype",
         help="The antenna model to use. Defaults to 'prototype'.",
     )

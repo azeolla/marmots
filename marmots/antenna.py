@@ -54,7 +54,8 @@ class Detector:
             
         elif model == "rhombic":
             
-            hpol_gain_file = np.load(data_directory + "/beacon/rhombic_antenna_vpol_rotated.npz")
+            hpol_gain_file = np.load(data_directory + "/beacon/hpol_rhombic.npz")
+
             hpol_freqs = hpol_gain_file["freq_MHz"]
             hpol_theta = hpol_gain_file["theta_deg"]
             hpol_az = hpol_gain_file["phi_deg"]
@@ -62,14 +63,14 @@ class Detector:
             
             self.grid = CGrid(hpol_freqs, hpol_theta, hpol_az)
             
-            self.resistance = 50
-            self.reactance = 0
+            self.resistance = np.interp(freqs, hpol_freqs, hpol_gain_file["Rant"])
+            self.reactance = np.interp(freqs, hpol_freqs, hpol_gain_file["Xant"])
             
-            self.Z_L = 50  # Ohms, the impedance at the load
+            self.Z_L = 200  # Ohms, the impedance at the load
             self.T_L = 100.0 # Kelvin, noise temperature of the first stage beacon amps
 
             self.ground_temp = 300 # Kelvin
-            self.sky_frac = 0.5
+            self.sky_frac = 0.4
 
             self.h_eff = self.effective_height(freqs)
             
@@ -156,8 +157,6 @@ class Detector:
             The peak-electric field (in V/m).
         freqs: np.ndarray
             The frequencies (in MHz) at which to evaluate.
-        antennas: int
-            The number of antennas.
         gain: float
             The peak gain (in dBi).
 

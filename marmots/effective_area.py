@@ -18,7 +18,11 @@ def calculate(
     altitude: np.ndarray,
     orientations: np.ndarray,
     fov: np.ndarray,
+<<<<<<< HEAD
     antennas: np.ndarray,
+=======
+    antennas: np.ndarray
+>>>>>>> cf1eb464c7a52dbd2a23187a3dd7789d16898954
     tauexit,
     voltage,
     taudecay,
@@ -91,7 +95,7 @@ def calculate(
         decay_point = Ag.trials + (Ag.axis[:,None] * decay_length).T
 
         # and get the altitude at the decay points
-        decay_altitude = geometry.norm(decay_point) - Re
+        decay_altitude = geometry.norm(decay_point) - Re 
 
         # get the zenith angle at the exit points
         exit_zenith = (np.pi/2.0) - Ag.emergence
@@ -99,7 +103,7 @@ def calculate(
         decay_zenith, decay_azimuth, decay_point_spherical = geometry.decay_zenith_azimuth(decay_point, Ag.axis)
 
         vrms = detector.Vrms(freqs)
-        
+
         n_stations = len(Ag.stations)
 
         triggers = np.zeros(Ag.trials.shape[0])
@@ -123,7 +127,7 @@ def calculate(
 
             phi_from_boresight = phi - np.deg2rad(Ag.orientations[i])
 
-            detector_altitude = Ag.stations[i]["geodetic"][2]
+            detector_altitude = Ag.stations[i]["geodetic"][2] 
 
             dbeacon = geometry.norm(Ag.stations[i]["geocentric"] - Ag.trials[in_sight])
 
