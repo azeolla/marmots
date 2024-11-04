@@ -41,7 +41,6 @@ class EFieldParam():
         dbeacon: np.ndarray,
         freqs: np.ndarray,
         shower_energy: np.ndarray,
-        antennas: int,
         theta: np.ndarray,
         phi: np.ndarray,
         FoV: float,
@@ -102,8 +101,8 @@ class EFieldParam():
         sim_distance_decay_km = distance_interp(
             self.dist_grid[alt_idx],
             self.Dsim[alt_idx],
-            exit_zenith, 
             decay_altitude, 
+            exit_zenith, 
             view,
         )
         
@@ -127,19 +126,18 @@ class EFieldParam():
         voltage[~cut] = detector.voltage_from_field(
             efields,
             freqs,
-            antennas,
             theta,
             (phi+360) % 360,
         )
 
         # account for ZHAIReS sims only extending to 3.16 deg in view angle
-        view_factor = np.ones(view.size)
+        #view_factor = np.ones(view.size)
 
-        view_factor[view > 3.16] = np.exp(
-                    -(view[view > 3.16])**2 / (2 * 3.16)**2
-                )
+        #view_factor[view > 3.16] = np.exp(
+                    #-(view[view > 3.16])**2 / (2 * 3.16)**2
+                #)
 
-        voltage[~cut] *= view_factor
+        #voltage[~cut] *= view_factor
 
         # distance correction (ZHAireS distance over Poinsseta distance)
         voltage[~cut] *= (sim_distance_decay_km / distance_decay_km)
@@ -173,23 +171,11 @@ class EFieldParam():
 
         # we now construct the distance LUT for the electric field scaling
 
-        self.Dsim = []
         self.sim_Bmag = 56000
         sim_incl = 63.5
         self.sim_sinVB = []
 
         for i in range(len(self.altitudes)):
-
-            # mesh the loaded decay altitudes and zenith angles
-            Da, Za, Va = np.meshgrid(self.decay_list[i], self.zenith_list[i], self.view_list[i])
-
-            # calculate the distance to the detector in each sim
-            Dsim, zenith_decay = distance_decay_to_detector_LUT(
-                Da.flatten(), Za.flatten(), Va.flatten(), self.altitudes[i], self.sim_icethick
-            )
-
-            # reshape the array to the appropriate size and save
-            self.Dsim.append(Dsim.reshape((self.zenith_list[i].size, self.decay_list[i].size, self.view_list[i].size)))
 
             B = np.array([np.cos(np.deg2rad(sim_incl)), 0, -np.sin(np.deg2rad(sim_incl))])
             V = np.array([np.sin(np.deg2rad(zenith_decay)), np.zeros(zenith_decay.shape), np.cos(np.deg2rad(zenith_decay))]).T
@@ -214,6 +200,7 @@ class EFieldParam():
         self.view_list = []
         self.efield_grid = []
         self.dist_grid = []
+        self.Dsim = []
 
         self.sim_icethick = 0.0
         self.sim_energy = 1e17
@@ -223,10 +210,11 @@ class EFieldParam():
         self.bfield = geomag_file["bfield"]
 
         for altitude in self.altitudes:
-            interp_file = np.load(self.param_dir + f"/efield_lookup_{str(altitude)}km.npz", allow_pickle=True)
+            interp_file = np.load(self.param_dir + f"/efield_lookup_{str(altitude)}km_v2.npz", allow_pickle=True)
         
             grid = interp_file["grid"]
             self.values.append(interp_file["efield"])
+            self.Dsim.append(interp_file["distance"])
 
             freqs = grid[0]
             self.decay_list.append(grid[1])
@@ -234,15 +222,16 @@ class EFieldParam():
             self.view_list.append(grid[3])
 
             self.efield_grid.append(CGrid(freqs, grid[1], grid[2], grid[3]))
-            self.dist_grid.append(CGrid(grid[2], grid[1], grid[3]))
+            self.dist_grid.append(CGrid(grid[1], grid[2], grid[3]))
+            
 
 
 @njit
 def distance_interp(
     grid: Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
     values: np.ndarray,
-    zenith: np.ndarray,
     decay: np.ndarray,
+    zenith: np.ndarray,
     view: np.ndarray,
 ) -> np.ndarray:
     """
@@ -271,7 +260,7 @@ def distance_interp(
         grid,
         values,
         np.column_stack(
-            (zenith, decay, view)
+            (decay, zenith, view)
         ),
         extrap_options.LINEAR
     )

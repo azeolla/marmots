@@ -41,6 +41,7 @@ GeometricArea = NamedTuple(
         ("N", float),
         ("orientations", np.ndarray),
         ("fov", np.ndarray),
+        ("antennas", np.ndarray),
     ],
 )
 
@@ -50,6 +51,7 @@ def geometric_area(
     dec_deg: float,
     TotalArea: NamedTuple,
     maxview: float,
+    antennas: np.ndarray,
     N: int = 10_000,
     min_elev: float = np.deg2rad(-30),
 ):
@@ -95,6 +97,7 @@ def geometric_area(
     stations_geodetic = TotalArea.stations_geodetic[above_cut]
     orientations = TotalArea.orientations[above_cut]
     fov = TotalArea.fov[above_cut]
+    antennas = antennas[above_cut]
 
     theta = np.pi/2 - dec
     phi = ra  
@@ -115,6 +118,7 @@ def geometric_area(
     stations_geodetic = stations_geodetic[valid]
     orientations = orientations[valid]
     fov = fov[valid]
+    antennas = antennas[valid]
     
     if (surface.shape[0] == 0):
 
@@ -147,7 +151,7 @@ def geometric_area(
                             "geodetic": stations_geodetic[j]}
                    
         # and we are done
-        return GeometricArea(A0, surface, dot, stations, trials[out_earth], axis, trials.shape[0], orientations, fov)
+        return GeometricArea(A0, surface, dot, stations, trials[out_earth], axis, trials.shape[0], orientations, fov, antennas)
 
 
 def decay_view(
