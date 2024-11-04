@@ -108,6 +108,7 @@ def geometric_area(
     axis = -spherical_to_cartesian(theta, phi, r=1.0)[0]
 
     # generate ~N random points in the corresponding segment
+
     trials, A0, stations, orientations, fov, antennas = points_on_earth(lat, lon, height, alt, axis, maxview, orientations, fov, antennas, N, min_elev)
     
     events_generated = trials.shape[0]
