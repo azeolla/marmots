@@ -41,7 +41,6 @@ class EFieldParam():
         dbeacon: np.ndarray,
         freqs: np.ndarray,
         shower_energy: np.ndarray,
-        antennas: int,
         theta: np.ndarray,
         phi: np.ndarray,
         FoV: float,
@@ -102,8 +101,8 @@ class EFieldParam():
         sim_distance_decay_km = distance_interp(
             self.dist_grid[alt_idx],
             self.Dsim[alt_idx],
-            exit_zenith, 
             decay_altitude, 
+            exit_zenith, 
             view,
         )
         
@@ -127,19 +126,18 @@ class EFieldParam():
         voltage[~cut] = detector.voltage_from_field(
             efields,
             freqs,
-            antennas,
             theta,
             (phi+360) % 360,
         )
 
         # account for ZHAIReS sims only extending to 3.16 deg in view angle
-        view_factor = np.ones(view.size)
+        #view_factor = np.ones(view.size)
 
-        view_factor[view > 3.16] = np.exp(
-                    -(view[view > 3.16])**2 / (2 * 3.16)**2
-                )
+        #view_factor[view > 3.16] = np.exp(
+                    #-(view[view > 3.16])**2 / (2 * 3.16)**2
+                #)
 
-        voltage[~cut] *= view_factor
+        #voltage[~cut] *= view_factor
 
         # distance correction (ZHAireS distance over Poinsseta distance)
         voltage[~cut] *= (sim_distance_decay_km / distance_decay_km)
@@ -173,23 +171,11 @@ class EFieldParam():
 
         # we now construct the distance LUT for the electric field scaling
 
-        self.Dsim = []
         self.sim_Bmag = 56000
         sim_incl = 63.5
         self.sim_sinVB = []
 
         for i in range(len(self.altitudes)):
-
-            # mesh the loaded decay altitudes and zenith angles
-            Da, Za, Va = np.meshgrid(self.decay_list[i], self.zenith_list[i], self.view_list[i])
-
-            # calculate the distance to the detector in each sim
-            Dsim, zenith_decay = distance_decay_to_detector_LUT(
-                Da.flatten(), Za.flatten(), Va.flatten(), self.altitudes[i], self.sim_icethick
-            )
-
-            # reshape the array to the appropriate size and save
-            self.Dsim.append(Dsim.reshape((self.zenith_list[i].size, self.decay_list[i].size, self.view_list[i].size)))
 
             B = np.array([np.cos(np.deg2rad(sim_incl)), 0, -np.sin(np.deg2rad(sim_incl))])
             V = np.array([np.sin(np.deg2rad(zenith_decay)), np.zeros(zenith_decay.shape), np.cos(np.deg2rad(zenith_decay))]).T
@@ -214,6 +200,7 @@ class EFieldParam():
         self.view_list = []
         self.efield_grid = []
         self.dist_grid = []
+        self.Dsim = []
 
         self.sim_icethick = 0.0
         self.sim_energy = 1e17
@@ -223,10 +210,11 @@ class EFieldParam():
         self.bfield = geomag_file["bfield"]
 
         for altitude in self.altitudes:
-            interp_file = np.load(self.param_dir + f"/efield_lookup_{str(altitude)}km.npz", allow_pickle=True)
+            interp_file = np.load(self.param_dir + f"/efield_lookup_{str(altitude)}km_v2.npz", allow_pickle=True)
         
             grid = interp_file["grid"]
             self.values.append(interp_file["efield"])
+            self.Dsim.append(interp_file["distance"])
 
             freqs = grid[0]
             self.decay_list.append(grid[1])
@@ -234,15 +222,15 @@ class EFieldParam():
             self.view_list.append(grid[3])
 
             self.efield_grid.append(CGrid(freqs, grid[1], grid[2], grid[3]))
-            self.dist_grid.append(CGrid(grid[2], grid[1], grid[3]))
+            self.dist_grid.append(CGrid(grid[1], grid[2], grid[3]))
 
 
 @njit
 def distance_interp(
     grid: Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
     values: np.ndarray,
-    zenith: np.ndarray,
     decay: np.ndarray,
+    zenith: np.ndarray,
     view: np.ndarray,
 ) -> np.ndarray:
     """
@@ -271,7 +259,7 @@ def distance_interp(
         grid,
         values,
         np.column_stack(
-            (zenith, decay, view)
+            (decay, zenith, view)
         ),
         extrap_options.LINEAR
     )
@@ -330,144 +318,7 @@ def efield_interp(
 
     # and we are done
     return out
-
-
-def get_X0(
-    zenith: np.ndarray, decay_altitude: np.ndarray, ice: float = 0.0
-) -> np.ndarray:
-    """
-    Compute the location of X0 given the event parameters.
-    See @swissel for details about this implementation.
-    Parameters
-    ----------
-    ice: float
-        The ice thickness in km.
-    decay_altitude: np.ndarray
-        The decay altitude in km.
-    zenith: np.ndarray
-        The zenith angle in degrees.
-    """
-    a = 1.0
-    b = 2.0 * np.cos(np.deg2rad(zenith)) * (Re + ice)
-    c = (Re + ice) ** 2 - (Re + ice + decay_altitude) ** 2
-    X0 = (-b + np.sqrt(b ** 2 - 4 * a * c)) / (2 * a)
-    return X0
-
-
-def get_decay_zenith_angle(
-    decay_altitude: np.ndarray, X0: np.ndarray, ice: float = 0.0
-) -> np.ndarray:
-    """
-    Get the zenith angle at the decay point.
-    See @swissel for details about this implementation.
-    Parameters
-    ----------
-    decay_altitude: np.ndarray
-        The decay altitude (in km).
-    X0: np.ndarray
-        The shower origin location.
-    ice: float
-        The thickness of the ice (km).
-    """
-
-    # get the quantities for the cosine rule
-    A = X0
-    B = Re + ice + decay_altitude
-    C = Re + ice
-
-    # construct cosz
-    cosz = (A ** 2 + B ** 2 - C ** 2) / (2 * A * B)
-    return np.rad2deg(np.arccos(cosz))
-
-
-def get_distance_decay_to_detector(
-    zenith_decay: np.ndarray,
-    view: np.ndarray,
-    decay_altitude: np.ndarray,
-    detector_altitude: float = 37.0,
-    ice: float = 0.0,
-) -> np.ndarray:
-    """
-    Get the distance from the decay point to the detector.
-    See @swissel for details on this implementation.
-    Parameters
-    ----------
-    decay_altitude: np.ndarray
-        The decay altitude (in km).
-    detector_altitude:
-        The altitude of the detector in (km).
-    zenith_decay: np.ndarray
-        The zenith angle at the decay (degrees)
-    view: np.ndarray
-        The view angle to the detector (degrees)
-    ice: float
-        The thickness of the ice (km).
-    """
-    a = 1
-    b = 2 * np.cos(np.deg2rad(zenith_decay)) * (Re + ice + decay_altitude)
-    c = (Re + ice + decay_altitude) ** 2 - (Re + detector_altitude) ** 2
-    d = (-b + np.sqrt(b ** 2 - 4 * a * c)) / (2 * a)
-
-    dist = d/np.cos(np.deg2rad(view))
-    return dist
-
-
-def distance_decay_to_detector_LUT(
-    decay_altitude: np.ndarray,
-    zenith: np.ndarray,
-    view: np.ndarray,
-    detector_altitude: float = 37.0,
-    ice: float = 0.0,
-) -> np.ndarray:
-    """
-    Return the distance from the decay to the detector (km).
-    See @swissel for details of this implementation.
-    Parameters
-    ----------
-    decay_altitude: np.ndarray
-        The decay altitude (km).
-    detector_altitude: float
-        The altitude of the detector (km).
-    zenith: np.ndarray
-        The zenith angle (degrees).
-    ice: float
-        The ice thickness (km)
-    Returns
-    -------
-    distance: np.ndarray
-        The distance from the decay to the detector (km).
-    """
-
-    # we coerce floats to numpy arrays
-    zenith = np.atleast_1d(zenith)
-    decay_altitude = np.atleast_1d(decay_altitude)
-
-    # construct the distance array
-    distance = np.zeros_like(zenith)
-    zenith_decay = np.zeros_like(zenith)
-
-    # find the index of ground events
-    ground = decay_altitude < 1e-10
-
-    zenith_decay[ground] = zenith[ground]
-    # finds the distance between the two points defined by the
-    # decay altitude, detector altitude, and the zenith angle at the point
-    distance[ground] = get_distance_decay_to_detector(zenith_decay[ground], view[ground], decay_altitude[ground], detector_altitude, ice)
-
-    # get the distance to the decay
-    X0 = get_X0(zenith[~ground], decay_altitude[~ground], ice)
-
-    # and the zenith angle at the decay point
-    zenith_decay[~ground] = get_decay_zenith_angle(decay_altitude[~ground], X0, ice)
-
-    # calculate the distance for the other points
-    distance[~ground] = get_distance_decay_to_detector(
-        zenith_decay[~ground], view[~ground], decay_altitude[~ground], detector_altitude, ice
-    )
-
-    # and return the calculated distances
-    return distance, zenith_decay
-
+    
 
 @njit
 def interp_bfield(

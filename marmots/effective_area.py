@@ -18,13 +18,13 @@ def calculate(
     altitude: np.ndarray,
     orientations: np.ndarray,
     fov: np.ndarray,
+    antennas: np.ndarray
     tauexit,
     voltage,
     taudecay,
     detector,
     maxview: float = np.radians(3.0),
     N: Union[np.ndarray, int] = 1_000_000,
-    antennas: int = 4,
     freqs: np.ndarray = np.arange(30,80,10)+5,
     trigger_SNR: float = 5.0,
     min_elev: float = np.deg2rad(-30),
@@ -65,7 +65,7 @@ def calculate(
 
     # compute the geometric area at the desired elevation angles
     Ag = geometry.geometric_area(
-        ra, dec, lat, lon, altitude, maxview, orientations, fov, N=N,min_elev=min_elev
+        ra, dec, lat, lon, altitude, maxview, orientations, fov, antennas, N=N,min_elev=min_elev
         )
 
     if Ag.emergence.size == 0:
@@ -98,7 +98,7 @@ def calculate(
 
         decay_zenith, decay_azimuth, decay_point_spherical = geometry.decay_zenith_azimuth(decay_point, Ag.axis)
 
-        vrms = detector.Vrms(freqs, antennas)
+        vrms = detector.Vrms(freqs)
 
         n_stations = len(Ag.stations)
 
@@ -141,7 +141,6 @@ def calculate(
                 dbeacon,
                 freqs,
                 Eshower[in_sight],
-                antennas,
                 np.rad2deg(theta),
                 np.rad2deg(phi_from_boresight),
                 Ag.fov[i],
@@ -150,7 +149,7 @@ def calculate(
             
 
             # calculate the SNR
-            SNR = V / vrms
+            SNR = np.sqrt(Ag.antennas[i]) * (V / vrms)
 
             # and check for a trigger
             trigger[in_sight] = SNR > trigger_SNR
