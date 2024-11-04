@@ -647,7 +647,7 @@ def obs_zenith_azimuth(
     y = np.sin(lon - decay_point_spherical[:,2]) * np.cos(np.pi/2 - decay_point_spherical[:,1])
     x = np.cos(lat) * np.sin(np.pi/2 - decay_point_spherical[:,1]) - np.sin(lat) * np.cos(np.pi/2 - decay_point_spherical[:,1]) * np.cos(lon - decay_point_spherical[:,2])
     a = np.arctan2(y,x)
-    
+
     # first add pi/2 so that azimuth is measured from East instead of North. Then wrap azimuth between [-pi,pi)
     azimuth = ((a + np.pi/2) + np.pi) % (2*np.pi) - np.pi
 
