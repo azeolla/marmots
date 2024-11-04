@@ -142,7 +142,7 @@ class Detector:
         return np.sqrt(h_eff)
 
     def voltage_from_field(
-        self, Epeak: np.ndarray, freqs: np.ndarray, antennas: int, theta: np.ndarray, phi: np.ndarray
+        self, Epeak: np.ndarray, freqs: np.ndarray, theta: np.ndarray, phi: np.ndarray
     ) -> np.ndarray:
         """
         Given a peak electric field (in V/m), calculate the voltage seen
@@ -156,8 +156,6 @@ class Detector:
             The peak-electric field (in V/m).
         freqs: np.ndarray
             The frequencies (in MHz) at which to evaluate.
-        antennas: int
-            The number of antennas.
         gain: float
             The peak gain (in dBi).
 
@@ -173,7 +171,7 @@ class Detector:
 
             G = (10 ** (D / 10.0))
 
-            x = antennas * self.h_eff * Epeak.T
+            x = self.h_eff * Epeak.T
             
             out = np.sum(x * np.sqrt(G.T), axis=1)
         
@@ -181,13 +179,13 @@ class Detector:
 
             G = (10 ** (self.hpol_gain / 10.0))
 
-            x = antennas * self.h_eff * Epeak.T
+            x = self.h_eff * Epeak.T
             
             out = np.sum(x * np.sqrt(G), axis=1)
 
         return out
 
-    def Vrms(self, freqs: np.ndarray, antennas: int):
+    def Vrms(self, freqs: np.ndarray):
         """
         The RMS voltage created by galactic, extragalactic, ground, and system noise.
         """
@@ -213,7 +211,7 @@ class Detector:
         noise[np.isnan(noise)] = 0 # replace all NaNs with 0
         df = freqs[1]-freqs[0]
         
-        return np.sqrt(np.sum(antennas*df*noise))
+        return np.sqrt(np.sum(df*noise))
 
 
 @njit
