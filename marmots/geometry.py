@@ -47,6 +47,7 @@ GeometricArea = NamedTuple(
         ("N", float),
         ("orientations", np.ndarray),
         ("fov", np.ndarray),
+        ("antennas", np.ndarray),
     ],
 )
 
@@ -59,6 +60,7 @@ def geometric_area(
     maxview: float,
     orientations: np.ndarray,
     fov: np.ndarray,
+    antennas: np.ndarray,
     N: int = 10_000,
     min_elev: float = np.deg2rad(-30),
 ):
@@ -106,13 +108,13 @@ def geometric_area(
     axis = -spherical_to_cartesian(theta, phi, r=1.0)[0]
 
     # generate ~N random points in the corresponding segment
-    trials, A0, stations, orientations, fov = points_on_earth(lat, lon, height, alt, axis, maxview, orientations, fov, N, min_elev)
+    trials, A0, stations, orientations, fov, antennas = points_on_earth(lat, lon, height, alt, axis, maxview, orientations, fov, antennas, N, min_elev)
     
     events_generated = trials.shape[0]
     
     if (events_generated == 0):
 
-        return GeometricArea(A0, np.array([]), np.array([]), np.array([]), np.array([]), axis, 0, np.array([]), np.array([]))
+        return GeometricArea(A0, np.array([]), np.array([]), np.array([]), np.array([]), axis, 0, np.array([]), np.array([]), np.array([]))
 
     else:
 
@@ -139,7 +141,7 @@ def geometric_area(
         emergence = np.pi/2.0 - np.arccos(dot) if dot.size else np.asarray([])
                    
         # and we are done
-        return GeometricArea(A0, dot, emergence, stations, trials[valid], axis, events_generated, orientations, fov)
+        return GeometricArea(A0, dot, emergence, stations, trials[valid], axis, events_generated, orientations, fov, antennas)
 
 
 def altitude(ra, dec, lat, lon):
@@ -196,6 +198,7 @@ def points_on_earth(
     maxview: float,
     orientations: np.ndarray,
     fov: np.ndarray,
+    antennas: np.ndarray,
     N: int = 10_000,
     min_elev: float = np.deg2rad(-30),
 ) -> np.ndarray:
@@ -253,7 +256,7 @@ def points_on_earth(
                             "geodetic": np.array([np.rad2deg(lat[~invalid][i]), np.rad2deg(lon[~invalid][i]), height[~invalid][i]]).T}
         orientations = orientations[~invalid]
         fov = fov[~invalid]
-        
+        antennas = antennas[~invalid]
         
         z = np.array([0,0,1])
         perp = np.cross(axis, z) # axis perpindicular to the shower axis
@@ -338,7 +341,7 @@ def points_on_earth(
         trials = spherical_to_cartesian(trials_spherical[:,1], trials_spherical[:,2], trials_spherical[:,0])
 
     # and return the trials, area, and valid stations
-    return trials, A0, stations, orientations, fov
+    return trials, A0, stations, orientations, fov, antennas
 
 
 def triangle_random_point(triangle, size):
