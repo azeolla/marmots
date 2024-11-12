@@ -18,11 +18,7 @@ def calculate(
     altitude: np.ndarray,
     orientations: np.ndarray,
     fov: np.ndarray,
-<<<<<<< HEAD
     antennas: np.ndarray,
-=======
-    antennas: np.ndarray
->>>>>>> cf1eb464c7a52dbd2a23187a3dd7789d16898954
     tauexit,
     voltage,
     taudecay,
