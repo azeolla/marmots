@@ -122,7 +122,7 @@ def geometric_area(
     
     if (surface.shape[0] == 0):
 
-        return GeometricArea(0, np.array([]), np.array([]), np.array([]), np.array([]), axis, 0, np.array([]), np.array([]))
+        return GeometricArea(0, np.array([]), np.array([]), np.array([]), np.array([]), axis, 0, np.array([]), np.array([]), np.array([]))
 
     else:
         
