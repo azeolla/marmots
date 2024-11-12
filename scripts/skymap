@@ -148,7 +148,7 @@ def pix_loop(i):
         altitude,
         orientations,
         fov,
-        antennas
+        antennas,
         tauexit,
         voltage,
         taudecay,

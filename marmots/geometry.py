@@ -114,7 +114,7 @@ def geometric_area(
     
     if (events_generated == 0):
 
-        return GeometricArea(A0, np.array([]), np.array([]), np.array([]), np.array([]), axis, 0, np.array([]), np.array([]))
+        return GeometricArea(A0, np.array([]), np.array([]), np.array([]), np.array([]), axis, 0, np.array([]), np.array([]), np.array([]))
 
     else:
 
