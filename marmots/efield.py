@@ -8,7 +8,7 @@ import attr
 import numpy as np
 from interpolation.splines import CGrid, eval_linear, extrap_options
 from numba import njit
-from scipy.interpolate import interpn
+from scipy.interpolate import interp1d
 
 import marmots.geometry as geometry
 from marmots import data_directory
@@ -106,13 +106,14 @@ class EFieldParam():
         
         sim_distance_decay_km[sim_distance_decay_km < 0] = 0
 
-        sim_sinVB = interpn(
-            (self.zenith_list[alt_idx], self.decay_list[alt_idx]),
+        sinVB = interp1d(
+            self.zenith_list[alt_idx],
             self.sim_sinVB[alt_idx],
-            (exit_zenith, decay_altitude),
             bounds_error=False,
-            fill_value=None,
+            fill_value="extrapolate",
         )
+
+        sim_sinVB = sinVB(exit_zenith)
 
         sim_sinVB[sim_sinVB < 0] = 0
         
@@ -176,12 +177,10 @@ class EFieldParam():
         for i in range(len(self.altitudes)):
 
             B = np.array([np.cos(np.deg2rad(sim_incl)), 0, -np.sin(np.deg2rad(sim_incl))])
-            V = np.array([np.sin(np.deg2rad(zenith_decay)), np.zeros(zenith_decay.shape), np.cos(np.deg2rad(zenith_decay))]).T
+            V = np.array([np.sin(np.deg2rad(self.zenith_list[i])), np.zeros(self.zenith_list[i].shape), np.cos(np.deg2rad(self.zenith_list[i]))]).T
             sinVB = geometry.norm(np.cross(V, B))
-
-            sinVB = sinVB.reshape((self.zenith_list[i].size, self.decay_list[i].size, self.view_list[i].size))
-                
-            self.sim_sinVB.append(sinVB[:,:,0]) # sin(VxB) is independent of the view angle
+ 
+            self.sim_sinVB.append(sinVB)
 
 
     def load_file(self) -> None:
@@ -190,7 +189,7 @@ class EFieldParam():
         """
         # load the data files
 
-        self.altitudes = [0.5, 1.0, 2.0, 3.0, 4.0]
+        self.altitudes = [1.0, 2.0, 3.0, 4.0]
 
         self.values = []
         self.decay_list = []
