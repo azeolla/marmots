@@ -55,6 +55,7 @@ class Detector:
         elif model == "rhombic":
             
             hpol_gain_file = np.load(data_directory + "/beacon/hpol_rhombic.npz")
+
             hpol_freqs = hpol_gain_file["freq_MHz"]
             hpol_theta = hpol_gain_file["theta_deg"]
             hpol_az = hpol_gain_file["phi_deg"]
