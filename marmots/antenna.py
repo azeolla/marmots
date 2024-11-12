@@ -12,6 +12,9 @@ from scipy.fft import rfftfreq, irfft
 from numba import jit, njit
 from interpolation.splines import CGrid, eval_linear, extrap_options
 
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning) 
+
 #from scipy.fft import irfft
 
 
