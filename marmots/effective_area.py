@@ -134,7 +134,7 @@ def calculate(
             # the zenith and azimuth (measured from East to North) from the station to each decay point
             theta, phi = geometry.obs_zenith_azimuth(Ag.stations[i], decay_point[in_view], decay_point_geodetic[in_view])
 
-            phi_from_boresight = phi - np.deg2rad(Ag.orientations[i])
+            phi_from_boresight = (phi - np.deg2rad(Ag.orientations[i]) + np.pi) % (2*np.pi) - np.pi
 
             detector_altitude = Ag.stations[i]["geodetic"][2]/1e3
 
