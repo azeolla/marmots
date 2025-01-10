@@ -44,7 +44,8 @@ class Detector:
             self.resistance = np.interp(freqs, hpol_impedance_freqs, hpol_impedance_real)
             self.reactance = np.interp(freqs, hpol_impedance_freqs, hpol_impedance_imag)
 
-            self.Z_L = 200.0  # Ohms, the impedance at the load
+            self.r = 4
+            self.Z_L = 50.0  # Ohms, the impedance at the load
             self.T_L = 100.0 # Kelvin, noise temperature of the first stage beacon amps
 
             self.ground_temp = 300 # Kelvin
@@ -65,7 +66,8 @@ class Detector:
             
             self.resistance = np.interp(freqs, hpol_freqs, hpol_gain_file["Rant"])
             self.reactance = np.interp(freqs, hpol_freqs, hpol_gain_file["Xant"])
-            
+
+            self.r = 1
             self.Z_L = 200  # Ohms, the impedance at the load
             self.T_L = 100.0 # Kelvin, noise temperature of the first stage beacon amps
 
@@ -81,6 +83,7 @@ class Detector:
             self.resistance = 50
             self.reactance = 0
 
+            self.r = 1
             self.Z_L = 50  # Ohms, the impedance at the load
             self.T_L = 100.0 # Kelvin, noise temperature of the first stage beacon amps
 
@@ -125,18 +128,18 @@ class Detector:
     def effective_height(self, freqs) -> np.ndarray:
             
         h_eff = (
-            4.0 * self.resistance / Z_0 * (c/freqs)**2 / 4.0 / np.pi
+            4.0 * self.resistance / Z_0 * (c/freqs)**2 / 4.0 / np.pi 
         )
         
-        P_div = (
-            np.abs(self.Z_L) ** 2
+        P_div = (1/self.r)
+            * (self.r * np.abs(self.Z_L)) ** 2
             / np.abs(
                 self.resistance
                 + 1j * self.reactance
-                + self.Z_L
+                + self.r * self.Z_L
             )
             ** 2
-        )
+        
         
         h_eff *= P_div
             
@@ -192,17 +195,17 @@ class Detector:
         """
         
         # P_div is the power from the voltage divider
-        P_div = (
-            np.abs(self.Z_L) ** 2
+        P_div = (1/self.r)
+            * (self.r * np.abs(self.Z_L)) ** 2
             / np.abs(
-                self.Z_L
-                + self.resistance
+                self.resistance
                 + 1j * self.reactance
+                + self.r * self.Z_L
             )
             ** 2
-        )
+        
         noise = (
-            4.0 * k_b * self.resistance * (self.sky_frac * sky.noise_temperature(freqs) + (1-self.sky_frac) * self.ground_temp)
+            4 * k_b * self.resistance * (self.sky_frac * sky.noise_temperature(freqs) + (1-self.sky_frac) * self.ground_temp)
         ) # noise due to galactic, extragalactic, and ground
         noise *= P_div
         noise += (
