@@ -94,7 +94,7 @@ class Tau_Decay_Simulator:
         energies = []
         for i, single_decay in enumerate(self.tau_decays):
             energy_fraction = 0
-            choose_decay = False
+            choose_decay = True
             for j,particle in enumerate(single_decay):
                 if( type == 'shower'):
                     if(particle.shower_type != None):
