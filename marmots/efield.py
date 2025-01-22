@@ -116,8 +116,10 @@ class EFieldParam():
         sim_sinVB = sinVB(exit_zenith)
 
         sim_sinVB[sim_sinVB < 0] = 0
-        
-        mag, sinVB = geomag(self.bfield_grid, self.bfield, beacon, decay_zenith, decay_azimuth)
+
+        test = np.array([37.589339, -118.23761867, 3.0])
+        #mag, sinVB = geomag(self.bfield_grid, self.bfield, beacon, decay_zenith, decay_azimuth)
+        mag, sinVB = geomag(self.bfield_grid, self.bfield, test, decay_zenith, decay_azimuth)
 
         efields = efield_interp(self.efield_grid[alt_idx], self.values[alt_idx], freqs, decay_altitude, exit_zenith, view)
 
@@ -130,13 +132,13 @@ class EFieldParam():
         )
 
         # account for ZHAIReS sims only extending to 3.16 deg in view angle
-        #view_factor = np.ones(view.size)
+        view_factor = np.ones(view.size)
 
-        #view_factor[view > 3.16] = np.exp(
-                    #-(view[view > 3.16])**2 / (2 * 3.16)**2
-                #)
+        view_factor[view > 3.16] = np.exp(
+                    -(view[view > 3.16])**2 / (2 * 3.16)**2
+                )
 
-        #voltage[~cut] *= view_factor
+        voltage[~cut] *= view_factor
 
         # distance correction (ZHAireS distance over Poinsseta distance)
         voltage[~cut] *= (sim_distance_decay_km / distance_decay_km)
@@ -300,6 +302,9 @@ def efield_interp(
     # allocate the output array
     out = np.empty((freqs.shape[-1], zenith.shape[-1]), dtype=np.float64)
 
+    clipped = np.copy(view)
+    clipped[view > 3.16] = 3.16 # strange extrapolation beyond 3.16 degrees
+
     # loop over the array
     for i in np.arange(freqs.shape[-1]):
 
@@ -308,9 +313,8 @@ def efield_interp(
             grid,
             values,
             np.column_stack(
-                (np.repeat(freqs[i], zenith.shape[-1]), decay, zenith, view)
-            ),
-            extrap_options.LINEAR
+                (np.repeat(freqs[i], zenith.shape[-1]), decay, zenith, clipped) 
+            )
         )
 
     # and we are done
@@ -350,7 +354,6 @@ def interp_bfield(
         grid,
         values,
         np.array([lat, lon]),
-        extrap_options.LINEAR
     )
 
     # and we are done

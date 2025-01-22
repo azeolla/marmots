@@ -199,7 +199,7 @@ class Detector:
                 + self.r * self.Z_L)
             ** 2)
         
-        noise = 4 * k_b * self.resistance * (self.sky_frac * sky.noise_temperature(freqs) + (1-self.sky_frac) * self.ground_temp)
+        noise = 4.0 * k_b * self.resistance * (self.sky_frac * sky.noise_temperature(freqs) + (1-self.sky_frac) * self.ground_temp)
          # noise due to galactic, extragalactic, and ground
         noise *= P_div
         noise += k_b * self.T_L * np.real(self.Z_L)
