@@ -12,9 +12,6 @@ from scipy.fft import rfftfreq, irfft
 from numba import jit, njit
 from interpolation.splines import CGrid, eval_linear, extrap_options
 
-import warnings
-warnings.filterwarnings("ignore", category=DeprecationWarning) 
-
 #from scipy.fft import irfft
 
 
@@ -47,7 +44,8 @@ class Detector:
             self.resistance = np.interp(freqs, hpol_impedance_freqs, hpol_impedance_real)
             self.reactance = np.interp(freqs, hpol_impedance_freqs, hpol_impedance_imag)
 
-            self.Z_L = 200.0  # Ohms, the impedance at the load
+            self.r = 4
+            self.Z_L = 50.0  # Ohms, the impedance at the load
             self.T_L = 100.0 # Kelvin, noise temperature of the first stage beacon amps
 
             self.ground_temp = 300 # Kelvin
@@ -58,6 +56,7 @@ class Detector:
         elif model == "rhombic":
             
             hpol_gain_file = np.load(data_directory + "/beacon/hpol_rhombic.npz")
+
             hpol_freqs = hpol_gain_file["freq_MHz"]
             hpol_theta = hpol_gain_file["theta_deg"]
             hpol_az = hpol_gain_file["phi_deg"]
@@ -67,8 +66,9 @@ class Detector:
             
             self.resistance = np.interp(freqs, hpol_freqs, hpol_gain_file["Rant"])
             self.reactance = np.interp(freqs, hpol_freqs, hpol_gain_file["Xant"])
-            
-            self.Z_L = 600  # Ohms, the impedance at the load
+
+            self.r = 1
+            self.Z_L = 200  # Ohms, the impedance at the load
             self.T_L = 100.0 # Kelvin, noise temperature of the first stage beacon amps
 
             self.ground_temp = 300 # Kelvin
@@ -83,11 +83,12 @@ class Detector:
             self.resistance = 50
             self.reactance = 0
 
+            self.r = 1
             self.Z_L = 50  # Ohms, the impedance at the load
             self.T_L = 100.0 # Kelvin, noise temperature of the first stage beacon amps
 
             self.ground_temp = 300 # Kelvin
-            self.sky_frac = 0.5
+            self.sky_frac = 0.3
 
             self.h_eff = self.effective_height(freqs)
 
@@ -126,19 +127,15 @@ class Detector:
 
     def effective_height(self, freqs) -> np.ndarray:
             
-        h_eff = (
-            4.0 * self.resistance / Z_0 * (c/freqs)**2 / 4.0 / np.pi
-        )
+        h_eff = 4.0 * self.resistance / Z_0 * (c/freqs)**2 / 4.0 / np.pi 
         
-        P_div = (
-            np.abs(self.Z_L) ** 2
+        P_div = ((1/self.r) 
+            * (self.r * np.abs(self.Z_L)) ** 2
             / np.abs(
                 self.resistance
                 + 1j * self.reactance
-                + self.Z_L
-            )
-            ** 2
-        )
+                + self.r * self.Z_L)
+            ** 2)
         
         h_eff *= P_div
             
@@ -172,7 +169,7 @@ class Detector:
             # calculate the linear gain - `gain` must be power gain.
             D = directivity(self.grid, self.hpol_gain, freqs, theta, phi)
 
-            G = (10 ** (D / 10.0))
+            G = 10 ** (D / 10.0)
 
             x = self.h_eff * Epeak.T
             
@@ -180,7 +177,7 @@ class Detector:
         
         else:
 
-            G = (10 ** (self.hpol_gain / 10.0))
+            G = 10 ** (self.hpol_gain / 10.0)
 
             x = self.h_eff * Epeak.T
             
@@ -194,22 +191,19 @@ class Detector:
         """
         
         # P_div is the power from the voltage divider
-        P_div = (
-            np.abs(self.Z_L) ** 2
+        P_div = ((1/self.r) 
+            * (self.r * np.abs(self.Z_L)) ** 2
             / np.abs(
-                self.Z_L
-                + self.resistance
+                self.resistance
                 + 1j * self.reactance
-            )
-            ** 2
-        )
-        noise = (
-            4.0 * k_b * self.resistance * (self.sky_frac * sky.noise_temperature(freqs) + (1-self.sky_frac) * self.ground_temp)
-        ) # noise due to galactic, extragalactic, and ground
+                + self.r * self.Z_L)
+            ** 2)
+        
+        noise = 4.0 * k_b * self.resistance * (self.sky_frac * sky.noise_temperature(freqs) + (1-self.sky_frac) * self.ground_temp)
+         # noise due to galactic, extragalactic, and ground
         noise *= P_div
-        noise += (
-            k_b * self.T_L * np.real(self.Z_L)
-        )  # internal noise
+        noise += k_b * self.T_L * np.real(self.Z_L)
+          # internal noise
         
         noise[np.isnan(noise)] = 0 # replace all NaNs with 0
         df = freqs[1]-freqs[0]

@@ -245,3 +245,90 @@ def visibile_horizon_mesh(lat, lon, height, orientations, fov, distance_beyond=1
     centroids = np.mean(cartesian,axis=1)
 
     return TotalArea(cartesian, centroids, np.mean(centroids,axis=0), stations_geocentric/1e3, stations_geodetic, orientations, fov)
+
+
+def horizon_mesh(lat, lon, height, orientations, fov, distance=250):
+
+    stations_geocentric = to_geocentric(lat, lon, height*1e3)
+    stations_geodetic = np.array([lat, lon, height*1e3]).T
+
+    polygons = []
+    for i in tqdm(range(stations_geocentric.shape[0])):
+        stat = stations_geocentric[i]/np.linalg.norm(stations_geocentric[i])
+        east = -np.cross(stat, np.array([0,0,1]))
+        east /= np.linalg.norm(east)
+        orientation = rotate_around_axis(east, stat, np.deg2rad(orientations[i]))
+        orientation /= np.linalg.norm(orientation)
+        angles = np.arange(-fov[i]/2,fov[i]/2+1,0.25)
+        vectors = np.zeros((angles.size,3))
+        # A fan of vectors spanning the field of view
+        for j in range(angles.shape[0]):
+            vectors[j] = rotate_around_axis(orientation, stat, np.deg2rad(angles[j]))
+
+        # Find the elevation at 1 km intervals along each vector
+        vec = distance*normalize(vectors)*1e3
+        llz = to_geodetic(stations_geocentric[i] + vec)
+        z = get_elevation(llz[:,0], llz[:,1])
+
+        points = np.zeros((angles.size + 2,2))
+        points[0] = stations_geodetic[i][0:2] # the location of the station
+
+        surface = np.array([llz[:,0], llz[:,1], z]).T
+        points[1:-1] = surface[:,0:2]
+        points[-1] = stations_geodetic[i][0:2] # the location of the station
+
+        # identify areas that cross on the antimeridian. These points need to be moved all to the same side
+        s = np.sum(points[:,1] > 0)
+        wrapped_over_antimeridian = (s != 0) & (s != points[:,1].size) & (np.mean(abs(points[:,1])) > 90)
+        if wrapped_over_antimeridian:
+            points[:,1][points[:,1] < 0] += 360
+
+        # sinusoidal projection allows us to work in 2D, while conserving the shape's area
+        x,y = project(points)
+
+        pp = list(zip(x/1e3,y/1e3))
+
+        polygons.append(Polygon(pp).buffer(0))
+        
+    # the union of all the areas
+    multi = unary_union(polygons)
+
+    # triangulate the union area in order to randomly sample points uniformly
+    triangles = []
+    if type(multi) == shapely.geometry.multipolygon.MultiPolygon:
+        for i in range(len(multi.geoms)):
+            vertices = np.array(multi.geoms[i].exterior.coords)[:-1]
+
+            start = np.arange(0, vertices.shape[0])
+            end = np.roll(start,-1)
+            segments = np.column_stack((start,end))
+
+            shape = dict(vertices = vertices, segments = segments)
+
+            tri = tr.triangulate(shape, 'pa0.5')
+
+            triangles.append(tri['vertices'][tri['triangles']])
+    else:
+        vertices = np.array(multi.exterior.coords)[:-1]
+
+        start = np.arange(0, vertices.shape[0])
+        end = np.roll(start,-1)
+        segments = np.column_stack((start,end))
+
+        shape = dict(vertices = vertices, segments = segments)
+
+        tri = tr.triangulate(shape, 'pa0.5')
+
+        triangles.append(tri['vertices'][tri['triangles']])
+
+    triangles = np.concatenate(triangles)
+
+    latitude, longitude = unproject(np.concatenate(triangles)[:,0]*1e3, np.concatenate(triangles)[:,1]*1e3)
+
+    z = get_elevation(latitude, longitude)
+
+    cartesian = to_geocentric(latitude, longitude, z).reshape(triangles.shape[0],3,3)/1e3
+
+    centroids = np.mean(cartesian,axis=1)
+
+    return TotalArea(cartesian, centroids, np.mean(centroids,axis=0), stations_geocentric/1e3, stations_geodetic, orientations, fov)

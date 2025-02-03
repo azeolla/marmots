@@ -97,7 +97,7 @@ from marmots.tauexit import TauExitLUT
 from marmots.efield import EFieldParam
 from marmots.pythia import Tau_Decay_Simulator
 from marmots.antenna import Detector
-from marmots.topography import visibile_horizon_mesh
+from marmots.topography import horizon_mesh
 from marmots.mesh import create_BVH_tree
 import matplotlib.pyplot as plt
 
@@ -141,7 +141,7 @@ taudecay = Tau_Decay_Simulator(pol="negative")
 det = Detector(args.model, freqs, args.gain)
 
 print("Generating topographic mesh...")
-totalmesh = visibile_horizon_mesh(lat, lon, altitude, orientations, fov)
+totalmesh = horizon_mesh(lat, lon, altitude, orientations, fov)
 
 print("Generating BVH tree...")
 BVH = create_BVH_tree(totalmesh)
