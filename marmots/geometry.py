@@ -10,6 +10,11 @@ from shapely.geometry import Polygon
 from shapely.ops import unary_union
 import triangle as tr
 
+from astropy.coordinates import EarthLocation, SkyCoord, ITRS
+from astropy.time import Time
+from astropy import units as u
+from astropy.coordinates import AltAz
+
 from marmots.constants import Re
 
 from numba import jit, njit
@@ -63,6 +68,7 @@ def geometric_area(
     antennas: np.ndarray,
     N: int = 10_000,
     min_elev: float = np.deg2rad(-30),
+    time: str = '2025-03-20 12:00:00'
 ):
     """
     Compute the geometric area on the surface of the Earth "illuminated"
@@ -99,13 +105,22 @@ def geometric_area(
     lat = np.deg2rad(lat_deg)
     lon = np.deg2rad(lon_deg)
 
-    alt = altitude(ra, dec, lat, lon)
+    observing_location = EarthLocation(lat=lat_deg*u.deg, lon=lon_deg*u.deg, height=height*u.km)  
+    observing_time = Time(time)  
+    aa = AltAz(location=observing_location, obstime=observing_time)
 
-    theta = np.pi/2 - dec
-    phi = ra  
+    coord = SkyCoord(ra=ra_deg*u.deg, dec=dec_deg*u.deg)
+    alt = np.deg2rad(coord.transform_to(aa).alt.value)
+
+    source_itrs = coord.transform_to(ITRS(obstime=observing_time))
+    x, y, z = source_itrs.x, source_itrs.y, source_itrs.z
+    axis = -np.array([x,y,z])
+
+    #theta = np.pi/2 - dec
+    #phi = ra  
 
     # the particle axis
-    axis = -spherical_to_cartesian(theta, phi, r=1.0)[0]
+    #axis = -spherical_to_cartesian(theta, phi, r=1.0)[0]
 
     # generate ~N random points in the corresponding segment
     trials, A0, stations, orientations, fov, antennas = points_on_earth(lat, lon, height, alt, axis, maxview, orientations, fov, antennas, N, min_elev)
