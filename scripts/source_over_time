@@ -15,16 +15,22 @@ if __name__ == "__main__":
         help="The energy of the primary neutrino [EeV].",
     )
     parser.add_argument(
+        "--ra",
+        type=float,
+        required=True,
+        help="Right ascension of the source [deg].",
+    )
+    parser.add_argument(
+        "--dec",
+        type=float,
+        required=True,
+        help="Declination of the source [deg].",
+    )
+    parser.add_argument(
         "--stations",
         type=str,
         default=None,
         help="The file containing the lat, lon, altitude, and orientation of each station.",
-    )
-    parser.add_argument(
-        "--nside",
-        type=int,
-        default=16,
-        help="Changes the resolution of the skymap.",
     )
     parser.add_argument(
         "--ntrials",
@@ -77,12 +83,6 @@ if __name__ == "__main__":
         help="The date and time (UTC) to simulate.",
     )
     parser.add_argument(
-        "--save-plot",
-        type=str,
-        default=None,
-        help="The filename to save the plot into.",
-    )
-    parser.add_argument(
         "--save", type=str, default=None, help="The directory to save the data into."
     )
     parser.add_argument(
@@ -104,16 +104,8 @@ from marmots.efield import EFieldParam
 from marmots.pythia import Tau_Decay_Simulator
 from marmots.antenna import Detector
 import matplotlib.pyplot as plt
-
-
-# the number of pixels in the healpy skymap, determined by nside
-npix = hp.nside2npix(args.nside)
-
-# the location of each pixel
-theta, phi = np.degrees(hp.pix2ang(nside=args.nside, ipix = np.arange(npix)))
-
-dec = (90 - theta)
-ra = phi
+from astropy.time import Time
+from astropy import units as u
 
 stations = np.loadtxt(args.stations).T
 
@@ -144,11 +136,17 @@ taudecay = Tau_Decay_Simulator(pol="negative")
 
 det = Detector(args.model, freqs, args.gain)
 
+observing_time = Time(args.time)
+mins = np.arange(0,2.5*60+1,3)
+times = []
+for i in range(mins.size):
+    times.append((observing_time + mins[i]*u.min).value)
+
 def pix_loop(i):
     # calculate the effective area
     results = effective_area.calculate(
-        ra[i],
-        dec[i],
+        args.ra,
+        args.dec,
         lat,
         lon, 
         altitude,
@@ -164,12 +162,12 @@ def pix_loop(i):
         freqs,
         args.trigger,
         np.radians(args.min_elev),
-        args.time,
+        times[i],
     )
 
     return results
 
-results = p_map(pix_loop, np.arange(npix), **{"num_cpus": args.num_cpus})
+results = p_map(pix_loop, np.arange(len(times)), **{"num_cpus": args.num_cpus})
 
 results = np.array(results).T
 
@@ -178,38 +176,10 @@ pexit = results[1]
 pdet = results[2]
 effective = results[3]
 
-average = np.zeros(effective.size)
-for i in range(360):
-    r = hp.Rotator(coord=['E'], rot=[i,0,0])
-    m2 = r.rotate_map_pixel(effective)
-    average += m2
-average /= 360
-
-# and save the plot if desired
+# and save if desired
 if args.save:
     
-    hp.write_map(args.save+"geometric.FITS", geometric, overwrite=True)
-    hp.write_map(args.save+"pexit.FITS", pexit, overwrite=True)
-    hp.write_map(args.save+"pdet.FITS", pdet, overwrite=True)
-    hp.write_map(args.save+"effective.FITS", effective, overwrite=True)
-    hp.write_map(args.save+"average.FITS", average, overwrite=True)
-
-# if we want to save the plot
-if args.save_plot:
-
-    hp.projview(
-    effective,
-    coord=["E"],
-    graticule=True,
-    graticule_labels=True,
-    unit=r"Geometric Area [$km^2$]",
-    xlabel=r"Right Ascension [$^\circ$]",
-    ylabel=r"Declination [$^\circ$]",
-    cb_orientation="horizontal",
-    projection_type="mollweide",
-    )
-
-    # save the figure
-    plt.savefig(args.save_plot)
-
-    plt.close()
+    np.save(args.save+"geometric.npy", geometric)
+    np.save(args.save+"pexit.npy", pexit)
+    np.save(args.save+"pdet.npy", pdet)
+    np.save(args.save+"effective.npy", effective)
