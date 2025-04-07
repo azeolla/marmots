@@ -97,7 +97,7 @@ from marmots.tauexit import TauExitLUT
 from marmots.efield import EFieldParam
 from marmots.pythia import Tau_Decay_Simulator
 from marmots.antenna import Detector
-from marmots.topography import horizon_mesh
+from marmots.topography import horizon_mesh, get_elevation
 from marmots.mesh import create_BVH_tree
 import matplotlib.pyplot as plt
 
@@ -115,17 +115,17 @@ stations = np.loadtxt(args.stations).T
 
 lat = stations[0]
 lon = stations[1]
-altitude = stations[2]
 orientations = stations[3]
 fov = stations[4]
 antennas = stations[5]
 
 lat = np.atleast_1d(lat)
 lon = np.atleast_1d(lon)
-altitude = np.atleast_1d(altitude)
 orientations = np.atleast_1d(orientations)
 fov = np.atleast_1d(fov)
 antennas = np.atleast_1d(antennas)
+
+altitude = (get_elevation(lat, lon) + 3)/1e3
 
 freqs = np.arange(args.bandwidth[0], args.bandwidth[1], 10)+5
 
