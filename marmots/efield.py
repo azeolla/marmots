@@ -117,9 +117,7 @@ class EFieldParam():
 
         sim_sinVB[sim_sinVB < 0] = 0
 
-        test = np.array([37.589339, -118.23761867, 3.0])
-        #mag, sinVB = geomag(self.bfield_grid, self.bfield, beacon, decay_zenith, decay_azimuth)
-        mag, sinVB = geomag(self.bfield_grid, self.bfield, test, decay_zenith, decay_azimuth)
+        mag, sinVB = geomag(self.bfield_grid, self.bfield, beacon, decay_zenith, decay_azimuth)
 
         efields = efield_interp(self.efield_grid[alt_idx], self.values[alt_idx], freqs, decay_altitude, exit_zenith, view)
 

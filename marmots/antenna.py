@@ -36,7 +36,6 @@ class Detector:
 
             self.grid = CGrid(hpol_csv_freqs, hpol_theta, hpol_az)
 
-            #hpol_impedance = self.read_xfdtd_impedance(data_directory + "/beacon/beacon_150m_hpol_impedance_middle.csv")
             hpol_impedance = self.read_xfdtd_impedance(data_directory + "/beacon/beacon_150m_hpol_impedance_middle.csv")
             hpol_impedance_freqs = np.array(hpol_impedance.freq_MHz)
             hpol_impedance_real = np.array(hpol_impedance.RealZ)
