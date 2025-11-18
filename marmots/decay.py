@@ -6,13 +6,13 @@ import numpy as np
 
 def probability(decay_length: np.ndarray, dbeacon: np.ndarray) -> np.ndarray:
     """
-    Return the probability that each tau (eV) decays
+    Return the probability that a tau with decay length `decay_length` decays
     before traveling `dbeacon` (km)`
 
     Parameter
     ---------
-    Etau: np.ndarray
-        The energy of each tau in eV.
+    decay_length: np.ndarray
+        The decay length of the tau (in km).
     dbeacon: np.ndarray
         The distance from exit to BEACON (in km).
 
