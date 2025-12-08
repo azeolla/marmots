@@ -5,7 +5,7 @@
 ![Python](https://img.shields.io/badge/python-3.6%20%7C%203.7%20%7C%203.8-blue)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-Marmots (**M**ultiple **A**ntenna A**r**rays on **Mo**untains **T**au **S**ensitivity) is a suite of tools used to calculate the tau point-source sensitivity of the [Beamforming Elevated Array for Cosmic Neutrinos]() (BEACON). 
+Marmots (**M**ultiple **A**ntenna A**r**rays on **Mo**untains **T**au **S**ensitivity) is a suite of tools used to calculate the tau point-source sensitivity of the [Beamforming Elevated Array for Cosmic Neutrinos](https://arxiv.org/abs/2504.13271) (BEACON). 
 
 ### Installation
 
@@ -52,27 +52,15 @@ Once the data files are installed, you can verify that the installation was succ
 
     $ python -c 'import marmots'
 
-If you wish to develop new features in `marmots`, you will also need to install some additional dependencies so you can run our unit tests
-
-    $ pip install --user -e .[test]
-	
-Once that is completed, you can run the unit tests directory from the `marmots` directory
-
-    $ python -m pytest tests
-
 
 ### Usage
 
-To calculate the acceptance of BEACON at different energies and configurations, use the `marmots` script that was installed onto your PATH (or under `marmots/scripts/marmots`).
+To calculate the acceptance of BEACON at different energies and configurations, use the `skymap` script that was installed onto your PATH (or under `marmots/scripts/skymap`).
 
-    $ marmots -h 
+    $ skymap -h 
     
-will print useful documentation. For example, to calculate the effective area of BEACON's 2018 prototype to 1 EeV neutrinos using 10,000 Monte Carlo trials per elevation step, run:
+will print useful documentation. The argument "--stations" should be point to a text file containing 5 columns: latitude (degrees), longitude (degrees), altitude (km), orientation (degrees relative to geographic east), field-of-view (degrees), and number of phased antennas. The "--nside" argument should be a power of 2 and specifies the resolution of the skymap. nside=16 corresponds to a skymap of 3,072 pixels (# of pixels = 12 * nside**2).
 
-    $ marmots --Enu 1 --prototype 2018 --ntrials 10_000
+As an example, to calculate the instantaneous effective area of 100 BEACON stations to 1 EeV neutrinos using 100,000 Monte Carlo trials per pixel, run:
 
-The `skymap` script can produce skymaps of the instantaneous effective area of BEACON as a function of right-ascension and declination.
-
-    $ skymap --Enu 1 --ntrials 50_000 --prototype 2018
-
-will produce a skymap of instantaneous effective area using 50,000 MC trials for BEACON's 2018 prototype.
+    $ skymap --nside 16 --Enu 1 --model prototype --ntrials 100_000 --stations /../stations_example.txt
