@@ -16,35 +16,15 @@ The below instructions are assuming that `python` refers to Python 3.\*. If `pyt
 The recommended method of installation is to first clone the package
 
     $ git clone https://github.com/azeolla/marmots.git
+
+To run `marmots`, you will need to extract the data files:
+
+	$ cd marmots
+	$ tar -xvzf data.tar.gz
 	
-and then change into the cloned directory and install using `pip`
+You can then install using `pip`:
 
-    $ cd marmots
 	$ pip install --user -e .
-    
-To run `marmots`, you will also need a set of parametrized LUT's for the tau exit probability produced using [NuTauSim][https://github.com/harmscho/NuTauSim]]. Please contact the maintainer of this repository for access. This LUT's need to be installed into the `marmots/data/tauexit` directory as shown:
-
-    tauexit/
-    |-- 0.0km_ice_midCS_stdEL
-    |   |-- LUT_1e+15_eV.npz
-        ...
-    |   `-- LUT_3e+20_eV.npz
-    |-- 1.0km_ice_midCS_stdEL
-    |   |-- LUT_1e+15_eV.npz
-        ...
-    |   `-- LUT_3e+20_eV.npz
-    |-- 2.0km_ice_midCS_stdEL
-    |   |-- LUT_1e+15_eV.npz
-        ...
-    |   `-- LUT_3e+20_eV.npz
-    |-- 3.0km_ice_midCS_stdEL
-    |   |-- LUT_1e+15_eV.npz
-        ...
-    |   `-- LUT_3e+20_eV.npz
-    `-- 4.0km_ice_midCS_stdEL
-        |-- LUT_1e+15_eV.npz
-        ...
-        `-- LUT_3e+20_eV.npz
     
 #### Testing and Development 
     
