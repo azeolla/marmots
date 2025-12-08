@@ -231,7 +231,7 @@ class EFieldParam():
         self.bfield = geomag_file["bfield"]
 
         for altitude in self.altitudes:
-            interp_file = np.load(self.param_dir + f"/efield_lookup_{str(altitude)}km_v2.npz", allow_pickle=True)
+            interp_file = np.load(self.param_dir + f"/efield_lookup_{str(altitude)}km.npz", allow_pickle=True)
         
             grid = interp_file["grid"]
             self.values.append(interp_file["efield"])
