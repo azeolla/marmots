@@ -14,8 +14,6 @@ __all__ = [
 
 
 def noise_temperature(freqs: np.ndarray) -> np.ndarray:
-    """
-    """
 
     # the combined sky noise
     noise = galactic_noise(freqs) + extragalactic_noise(freqs)

@@ -138,6 +138,19 @@ class Tau_Decay_Simulator:
     
     
     def shower_energy(self, Etau: np.ndarray):
+        """
+        Sample a random set of EAS shower energies given the tau energy (in eV). 
+
+        Parameter
+        ---------
+        Etau: np.ndarray
+            Tau energies, in eV.
+
+        Returns
+        -------
+        shower_energy: np.ndarray
+            An (N,)-length ndarray containing random EAS shower energies.
+        """
         
         return Etau * self.sample_energy_fraction(num_events = Etau.size)
 
@@ -145,21 +158,17 @@ class Tau_Decay_Simulator:
     def sample_range(self, Etau: np.ndarray) -> np.ndarray:
         """
         Sample a random set of tau decay ranges (in km) given the
-        decay length [in km]. The tau decay ranges will not extend beyond dbeacon.
+        energy (in eV). 
 
         Parameter
         ---------
-        decay_length: np.ndarray
-            An (N,)-length ndarray of average decay lengths in km.
-        dbeacon: np.ndarray
-            An (N,)-length ndarray of distances to BEACON in km.
-        min: np.ndarray
-            An (N,)-length ndarray of minimum decay distances
+        Etau: np.ndarray
+            Tau energies, in eV.
 
         Returns
         -------
-        ranges: np.ndarray
-            An (N,)-length ndarray containing random tau ranges in km.
+        d: np.ndarray
+            An (N,)-length ndarray containing random tau decay distances in km.
         """
         d = np.random.exponential(4.9e-17 * Etau)
 

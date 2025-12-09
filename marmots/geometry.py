@@ -10,6 +10,11 @@ from shapely.geometry import Polygon
 from shapely.ops import unary_union
 import triangle as tr
 
+from astropy.coordinates import EarthLocation, SkyCoord, ITRS
+from astropy.time import Time
+from astropy import units as u
+from astropy.coordinates import AltAz
+
 from marmots.constants import Re
 
 from numba import jit, njit
@@ -54,41 +59,75 @@ def geometric_area(
     antennas: np.ndarray,
     N: int = 10_000,
     min_elev: float = np.deg2rad(-30),
+    time: str = '2025-03-20 12:00:00'
 ):
     """
     Compute the geometric area on the surface of the Earth "illuminated"
-    within a maximum `view` angle around a source elevation `elev` and
-    a source `phi` from an an altitude `height`.
+    within a maximum `view` angle in the direction of a point source at ra_deg and dec_deg,
+    from each station.
 
     Parameters
     ----------
-    height: float
-        The observation heights (km).
+    ra_deg: float
+        Right ascension of the point source, in degrees.
+    dec_deg: float
+        Declination of the point source, in degrees.
+    lat_deg: np.ndarray
+        Latitudes of the stations, in degrees.
+    lon_deg: np.ndarray
+        Longitudes of the stations, in degrees.
+    height: np.ndarray
+        Altitudes of the stations, in km.
     maxview: float
-        The maximum view angle from the payload (radians).
-    elev: float
-        The elevation angle (-nve) of the source at the payload (radians).
-    phi: float
-        The azimuthal angle of the source (radians).
+        Opening angle of the cone projected in the direction of the point source, in radians.
+    orientations: np.ndarray
+       The orientation of each station (in degrees, relative to east).
+    fov: np.ndarray
+       The field-of-view of each station (in degrees).
+    antennas: np.ndarray
+       The number of phased antennas in each station.
     N: int
-        The number of trials to evaluate the integral.
-    ice: float
-        The constant thickness of the ice (km)
+        The number of trials (exit points) to generate.
+    min_elev: float
+        Elevation angles below this threshold will not be simulated. Effective area will be assumed to be zero.
+    time: str
+        The time in which to calculate the instantaneous effective area.
 
     Returns
     -------
     area: float
-        The geometric area at each elevation angle (km^2).
+        The geometric area A_g in which exit points are generated (km^2).
+    dot: np.ndarray
+        The dot product between exit point location and particle axis.
     emergence: np.ndarray
-        The detected emergence angles for each trial (radians)
-    view: np.ndarray
-        The detected view angles for each trial (view)
+        The emergence angles for each trial (radians).
+    stations: np.ndarray
+        Geocentric and geodetic coordinates of the valid stations.
+    trials: np.ndarray
+        Geocentric coordinates of the generated exit points.
+    axis: np.ndarray
+        Particle axis unit vector.
+    N: float
+        The number of trials generated.
+    orientations: np.ndarray
+        Orientations of the valid stations.
+    fov: np.ndarray
+       The field-of-view of each valid station.
+    antennas: np.ndarray
+       The number of phased antennas in each valid station.
+    
     """
 
-    ra = np.deg2rad(ra_deg)
-    dec = np.deg2rad(dec_deg)
+    lat = TotalArea.stations_geodetic[:,0]
+    lon = TotalArea.stations_geodetic[:,1]
+    height = TotalArea.stations_geodetic[:,2]
 
-    alt = altitude(ra, dec, np.deg2rad(TotalArea.stations_geodetic[:,0]), np.deg2rad(TotalArea.stations_geodetic[:,1]))
+    # determine the altitude of the point source given a location and time
+    observing_location = EarthLocation(lat=lat*u.deg, lon=lon*u.deg, height=height*u.m)  
+    observing_time = Time(time)  
+    aa = AltAz(location=observing_location, obstime=observing_time)
+    coord = SkyCoord(ra=ra_deg*u.deg, dec=dec_deg*u.deg)
+    alt = np.deg2rad(coord.transform_to(aa).alt.value)
     
     # check to see that we're looking above the minimum elevation angle
     above_cut = alt >= min_elev
@@ -99,11 +138,11 @@ def geometric_area(
     fov = TotalArea.fov[above_cut]
     antennas = antennas[above_cut]
 
-    theta = np.pi/2 - dec
-    phi = ra  
-
-    # the particle axis
-    axis = -spherical_to_cartesian(theta, phi, r=1.0)[0]
+    # determine the vector to the point source
+    # the inverse of this vector is the particle axis
+    source_itrs = coord.transform_to(ITRS(obstime=observing_time))
+    x, y, z = source_itrs.x, source_itrs.y, source_itrs.z
+    axis = -np.array([x,y,z])
     
     in_view = np.zeros(TotalArea.centroids.shape[0], dtype=bool)
     valid = np.zeros(stations_geocentric.shape[0], dtype=bool)
@@ -163,33 +202,9 @@ def decay_view(
     return np.arccos(np.dot(normalize(d), axis)) 
 
 
-def altitude(ra, dec, lat, lon):
-    alt = np.arcsin( np.sin(dec)*np.sin(lat) + np.cos(dec)*np.cos(lat)*np.cos(lon-ra) )
-    return alt
-
-
 def view_angle(point: np.ndarray, obspoint: np.ndarray, axis: np.ndarray) -> np.ndarray:
     """
-    Given the height of the observer (in km), the location of the observation
-    point `point` in geocentric coordinates, and the particle `axis`, calculate
-    the angle of the observer from the particle's frame i.e. the view angle.
-
-    Parameters
-    ----------
-    height: np.ndarray
-       A (N, 1)-length array containing detector heights (in km).
-    point: np.ndarray
-       A (N, 3)-length array containing obspoint locations in
-       geocentric (km) coordinates.
-    axis: np.ndarray
-       A (N, 3)-length array containing the normalized
-       axis of the particle velocity.
-
-    Returns
-    -------
-    view: np.ndarray
-       The view angle for each decay point (in radians).
-
+    Calculates the view angle between a point and an obersavation point, given the particle axis at the point.
     """
        
     # calculate the vector from the point to the obs. points
@@ -200,6 +215,9 @@ def view_angle(point: np.ndarray, obspoint: np.ndarray, axis: np.ndarray) -> np.
 
 
 def triangle_random_point(triangle, size):
+    """
+    Randomly samples 'size' number of points from a 3D triangle defined by its three vertices.
+    """
     r1 = np.random.random(size)
     r2 = np.random.random(size)
 
@@ -208,14 +226,91 @@ def triangle_random_point(triangle, size):
     return P
 
 
-def cartesian_to_spherical(point):
+def rotate_around_axis(vector, axis, theta):
+    """
+    Rotates a vector around 'axis' by 'theta' (in radians).
+    """
+    R = np.empty((3,3))
+    R[0] = np.array([np.cos(theta)+axis[0]**2 * (1-np.cos(theta)), axis[0]*axis[1]*(1-np.cos(theta)) - axis[2]*np.sin(theta),axis[0]*axis[2]*(1-np.cos(theta)) + axis[1]*np.sin(theta)])
+    R[1] = np.array([axis[1]*axis[0]*(1-np.cos(theta)) + axis[2]*np.sin(theta),np.cos(theta)+axis[1]**2 * (1-np.cos(theta)),axis[1]*axis[2]*(1-np.cos(theta)) - axis[0]*np.sin(theta)])
+    R[2] = np.array([axis[2]*axis[0]*(1-np.cos(theta)) - axis[1]*np.sin(theta),axis[2]*axis[1]*(1-np.cos(theta)) + axis[0]*np.sin(theta),np.cos(theta)+axis[2]**2 * (1-np.cos(theta))])
+    
+    return R @ vector
 
+
+def find_intersection(vector, station):
+    """
+    See: https://diegoinacio.github.io/computer-vision-notebooks-page/pages/ray-intersection_sphere.html
+
+    Calculates where a vector from a station intersects a sphere with Earth's radius.
+    
+    note: this assumes that the vector is pointed toward the source
+    """
+    t = np.dot(station, vector)
+    p = station - vector*t
+    d = np.linalg.norm(p)
+
+    height = np.linalg.norm(station)
+    horizon_elev = -np.arccos(Re / height) # the angle from horizontal to the horizon from the station
+    vec_elev = -np.arccos(np.dot(station/height,vector)) + np.pi/2 # the angle from horizontal for the observation vector
+
+    if(vec_elev > horizon_elev):
+        # if the vector points above the horizon, rotate it towards the Earth such that it hits the horizon
+        # this way we do not sample points beyond the visible horizon
+        axis = np.cross(station/height, vector) # axis perpendicular to the station vector and observation vector
+        horizon_vec = rotate_around_axis(vector, axis, -(horizon_elev-vec_elev)) # rotate the observation vector such that it is pointed at the horizon
+        new_t = np.dot(station, horizon_vec)
+        new_p = station - horizon_vec*new_t
+        Ps = new_p
+
+    elif(vec_elev == horizon_elev):
+        # this happens when the vector is tangent to the Earth
+        Ps = p
+
+    else:
+        # find the first point of intersection when the vector passes through the Earth
+        i = np.sqrt(Re**2 - d**2)
+        Ps = station - vector*(t + i)
+        
+    return Ps
+
+
+def cartesian_to_spherical(point):
+    """
+    Converts 3D cartesian coordinates to spherical coordinates.
+    """
     spherical = np.empty((point.shape[0], 3))
 
     spherical[:,0] = norm(point)
     spherical[:,1] = np.arccos(point[:,2]/norm(point))
     spherical[:,2] = np.arctan2(point[:,1], point[:,0])
 
+    return spherical
+
+
+def project(radius, latitude, longitude):
+    """
+    Performs sinusoidal projection given a sphere's radius, and the latitude and longitude of the point.
+    """
+    lat_dist = np.pi * radius / 180
+    y = latitude * lat_dist 
+    x = longitude * lat_dist * np.cos(np.deg2rad(latitude))
+    return x, y
+
+
+def unproject(point, radius):
+    """
+    Reverse sinusoidal projection.
+    """
+    spherical = np.empty((point.shape[0], 3))
+    
+    lat_dist = np.pi * radius/180
+    latitude = point[:,1]/lat_dist
+    longitude = point[:,0]/lat_dist/np.cos(np.deg2rad(latitude))
+    
+    spherical[:,0] = radius
+    spherical[:,1] = np.deg2rad(90 - latitude)
+    spherical[:,2] = np.deg2rad(longitude)
     return spherical
 
 
@@ -228,8 +323,8 @@ def horizon_angle(height: np.ndarray, radius: float = Re) -> np.ndarray:
     ----------
     height: np.ndarray
        The height of the viewing point (km).
-    ice: float
-       The constant ice thickness (km)
+    radius: float
+       The Earth radius to use (in radians).
 
     Returns
     -------
@@ -299,10 +394,12 @@ def decay_zenith_azimuth(decay_point: np.ndarray, axis: np.ndarray) -> np.ndarra
 
     Returns
     -------
-    theta: np.ndarray
+    zenith: np.ndarray
         The zenith angle of each shower from a line normal to the Earth centered on the decay point (rad).
-    phi: np.ndarray
+    azimuth: np.ndarray
         The azimuth angle (measured from East to North) of each shower relative to the decay point (rad).
+    decay_point_spherical: np.ndarray
+        Spherical coordinates of the decay point.
     """
 
     dot1 = np.dot(normalize(decay_point), axis)
@@ -377,9 +474,9 @@ def obs_zenith_azimuth(
 
     Returns
     -------
-    theta: np.ndarray
+    zenith: np.ndarray
         The zenith angle of each decay point from a line normal to the Earth centered on the station (rad).
-    phi: np.ndarray
+    azimuth: np.ndarray
         The azimuth angle (measured from East to North) of each decay point relative to the station (rad).
     """
 
@@ -398,40 +495,27 @@ def obs_zenith_azimuth(
     y = np.sin(lon - dlon) * np.cos(dlat)
     x = np.cos(lat) * np.sin(dlat) - np.sin(lat) * np.cos(dlat) * np.cos(lon - dlon)
     a = np.arctan2(y,x)
-    
+
     # first add pi/2 so that azimuth is measured from East instead of North. Then wrap azimuth between [-pi,pi)
     azimuth = ((a + np.pi/2) + np.pi) % (2*np.pi) - np.pi
 
     return zenith, azimuth
 
 
-def distance_to_horizon(height: float, radius: float = Re) -> float:
-    """
-    Calculate the distance to the horizon from a given altitude
-    with a given ice thickness.
-    Parameters
-    ----------
-    height: np.ndarray
-        The payload altitude in km.
-    thickness: np.ndarray
-        The ice thickness in km.
-    Returns
-    -------
-    distance: np.ndarray
-        The distance to the payload in km.
-    """
-    return (radius + height) * np.sin(-horizon_angle(height))
-
-
 @njit
 def norm(vec: np.ndarray):
+    """
+    Calculates the magnitude of an array of vectors along axis=1. Faster than using np.linalg.norm(axis=1) for very large arrays.
+    """
     # norm along axis=1
     return np.sqrt(vec[:,0]**2 +vec[:,1]**2 + vec[:,2]**2)
 
 
 @njit
 def normalize(vec: np.ndarray):
-    # normalize along axis=1
+    """
+    Normalizes an array of vectors along axis=1. Faster than using np.linalg.norm(axis=1) for very large arrays.
+    """
     norm = np.sqrt(vec[:,0]**2 +vec[:,1]**2 + vec[:,2]**2)
     return vec/np.expand_dims(norm, 1)
 

@@ -2,6 +2,8 @@
 This module provides methods to randomly sample the included TAUOLA decay
 file for various parameters including shower types, and fractional shower
 energies.
+
+NOTE: this module has been replaced with pythia.py!
 """
 import os.path as path
 

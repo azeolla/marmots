@@ -24,6 +24,12 @@ __all__ = [
  
 class Detector:
     def __init__(self, model, freqs, gain = None):
+
+        """
+        `model` specifies which model to load. Currently, there is `prototype`, `rhombic`, and `matched`.
+        `freqs` specifies which frequencies to evaluate.
+        `gain` should be given if using model `matched`.
+        """
         
         if model == "prototype":
             hpol_gain_file = self.read_xfdtd_gain(
@@ -44,12 +50,12 @@ class Detector:
             self.resistance = np.interp(freqs, hpol_impedance_freqs, hpol_impedance_real)
             self.reactance = np.interp(freqs, hpol_impedance_freqs, hpol_impedance_imag)
 
-            self.r = 4
+            self.r = 4 # BEACON 4:1 transformer
             self.Z_L = 50.0  # Ohms, the impedance at the load
             self.T_L = 100.0 # Kelvin, noise temperature of the first stage beacon amps
 
             self.ground_temp = 300 # Kelvin
-            self.sky_frac = 0.5
+            self.sky_frac = 0.5 # fraction of the antenna FoV occupied by the sky
 
             self.h_eff = self.effective_height(freqs)
             
@@ -126,6 +132,9 @@ class Detector:
         return impedance
 
     def effective_height(self, freqs) -> np.ndarray:
+        """
+        Calculates the antenna effective height at each frequency.
+        """
             
         h_eff = 4.0 * self.resistance / Z_0 * (c/freqs)**2 / 4.0 / np.pi 
         
@@ -156,14 +165,17 @@ class Detector:
             The peak-electric field (in V/m).
         freqs: np.ndarray
             The frequencies (in MHz) at which to evaluate.
-        gain: float
-            The peak gain (in dBi).
-
+        theta: np.ndarray
+            The observation zenith angle (in degrees).
+        phi: np.ndarray
+            The observation azimuth angle (in degrees).
+            
         Returns
         -------
-        voltage; np.ndarray
+        voltage: np.ndarray
             The voltage seen at the load of the antenna.
         """
+        # check if gain is an array for just a single value
         if type(self.hpol_gain) == np.ndarray:
 
             # calculate the linear gain - `gain` must be power gain.
@@ -198,13 +210,13 @@ class Detector:
                 + 1j * self.reactance
                 + self.r * self.Z_L)
             ** 2)
-        
+
+        # noise due to galactic, extragalactic, and ground
         noise = 4.0 * k_b * self.resistance * (self.sky_frac * sky.noise_temperature(freqs) + (1-self.sky_frac) * self.ground_temp)
-         # noise due to galactic, extragalactic, and ground
         noise *= P_div
+        # internal noise
         noise += k_b * self.T_L * np.real(self.Z_L)
-          # internal noise
-        
+
         noise[np.isnan(noise)] = 0 # replace all NaNs with 0
         df = freqs[1]-freqs[0]
         
@@ -227,20 +239,18 @@ def directivity(
     grid: CGrid
         The rectangular grid for the interpolation.
     values: np.ndarray
-        The 4D array of values at the grid locations.
+        The 3D array of values at the grid locations.
     freqs: np.ndarray
         The frequencies to interpolate at (MHz).
-    decay: np.ndarray
-        The decay altitudes to interpolate at (km).
-    zenith: np.ndarray
-        The zenith angles to interpolate at (degrees).
-    view: np.ndarray
-        The view to interpolate at (degrees).
+    theta: np.ndarray
+        The zenith angle at which the gain is desired (degrees).
+    phi: np.ndarray
+        The azimuth angle at which the gain is desired (degrees).
 
     Returns
     -------
-    Efield: np.ndarray
-       The electric field interpolated at each (f, d, z, v).
+    Gain: np.ndarray
+       The gain interpolated at each (f, t, p).
     """
     # allocate the output array
     D = np.zeros((freqs.size, theta.size), dtype=np.float64)
