@@ -5,6 +5,11 @@ from marmots.topography import to_geodetic
 
 
 class BVHNode:
+    """
+    This class generates a Bounding Volume Hierarchy.
+    Calculating intersections is super, super slow without doing this.
+    Essentially, this organizes all the triangles into smaller and smaller boxes.
+    """
     def __init__(self, bounding_box, left=None, right=None, triangles=None):
         self.bounding_box = bounding_box
         self.left = left
@@ -51,6 +56,9 @@ def build_bvh_tree(triangles, max_triangles_per_node=100):
 
 @njit
 def intersect_ray_aabb(ray_origin, ray_direction, bounding_box):
+    """
+    Determines if a ray intersects a bounding box
+    """
     
     t_min = np.divide(bounding_box[0] - ray_origin, ray_direction)
     t_max = np.divide(bounding_box[1] - ray_origin, ray_direction)
@@ -65,6 +73,11 @@ def intersect_ray_aabb(ray_origin, ray_direction, bounding_box):
 
 
 def intersect_bvh(root_node, ray_origin, ray_direction):
+    """
+    Uses the Bounding Volume Hierarchy to find intersections. Once it gets to the end of tree,
+    it finds the points at which triangles are intersected.
+    """
+    
     stack = [root_node]
     intersections = []
 
@@ -83,12 +96,16 @@ def intersect_bvh(root_node, ray_origin, ray_direction):
                     stack.append(node.left)
                 if node.right is not None:
                     stack.append(node.right)
-
+    # return the location of all intersections
     return intersections
 
 
 @njit(fastmath=True)
 def triangle_intersections(origin, axis, triangles):
+    """
+    Fast algorithm for calculating the locations at which a vector (axis) extending 
+    from origin intersects a mesh of triangles.
+    """
 
     e1 = triangles[:,1]-triangles[:,0]
     e2 = triangles[:,2]-triangles[:,0]
@@ -114,6 +131,9 @@ def triangle_intersections(origin, axis, triangles):
 
 @njit
 def intersect_segment_aabb(segment_start, segment_end, bounding_box):
+    """
+    Determines if a line segment intersects a bounding box
+    """
     segment_direction = segment_end - segment_start
     inv_dir = 1.0 / segment_direction
 
@@ -133,6 +153,10 @@ def intersect_segment_aabb(segment_start, segment_end, bounding_box):
 
 
 def intersect_bvh_with_segment(root_node, segment_start, segment_end):
+    """
+    Uses the Bounding Volume Hierarchy to find intersections. In this case, we only care about if intersections
+    occur at all.
+    """
     stack = [root_node]
 
     while stack:
@@ -155,6 +179,9 @@ def intersect_bvh_with_segment(root_node, segment_start, segment_end):
 
 @njit(fastmath=True)
 def triangle_segment_intersections(segment_start, segment_end, triangles):
+    """
+    Determines which triangles a line segment intersects.
+    """
     segment_direction = segment_end - segment_start
     segment_length = np.linalg.norm(segment_direction)
     segment_direction /= segment_length
@@ -171,7 +198,9 @@ def triangle_segment_intersections(segment_start, segment_end, triangles):
     t = np.sum(AO * N, axis=1) * invdet
 
     t1 = np.abs(det) >= 1e-6
-    t2 = t > 0.5 # this ensures that we don't count intersections at the station
+    # this ensures that we don't count intersections very close to the station.
+    # intersections near the station can be misleading, depending on the mesh resolution.
+    t2 = t > 0.5 
     t3 = u >= 0.0
     t4 = v >= 0.0
     t5 = (u + v) <= 1.0
@@ -183,6 +212,9 @@ def triangle_segment_intersections(segment_start, segment_end, triangles):
 
 
 def rotation_matrix(axis, theta):
+    """
+    Generates a rotation matrix which rotates a vector by angle theta around axis.
+    """
     R = np.empty((3,3))
     R[0] = np.array([np.cos(theta)+axis[0]**2 * (1-np.cos(theta)), axis[0]*axis[1]*(1-np.cos(theta)) - axis[2]*np.sin(theta),axis[0]*axis[2]*(1-np.cos(theta)) + axis[1]*np.sin(theta)])
     R[1] = np.array([axis[1]*axis[0]*(1-np.cos(theta)) + axis[2]*np.sin(theta),np.cos(theta)+axis[1]**2 * (1-np.cos(theta)),axis[1]*axis[2]*(1-np.cos(theta)) - axis[0]*np.sin(theta)])
@@ -192,6 +224,9 @@ def rotation_matrix(axis, theta):
 
 
 def geocentric2local(points, origin):
+    """
+    Converts geocentric coordinates to local ENU coordinates.
+    """
     
     new = points - origin
     
@@ -209,6 +244,9 @@ def geocentric2local(points, origin):
 
 
 def local2geocentric(points, origin):
+    """
+    Converts local ENU coordinates to geocentric coordinates.
+    """
     
     llz = to_geodetic(np.array([origin])*1e3)[0]
 

@@ -149,23 +149,28 @@ def calculate(
 
             trigger = np.zeros(Ag.trials.shape[0])
 
+            # select relevant events
             in_view = ground_view <= maxview
-            
+
+            # determine line-of-sight between decay points and the station
             LoS = decay.line_of_sight(decay_point[in_view], Ag.stations[i]["geocentric"], totalmesh, BVH)
             
             in_view[in_view] = LoS
-            
+
+            # if no decays are in view, skip
             if np.sum(in_view) == 0:
                 continue
 
+            # distance from station to decay point
             distance_to_decay = geometry.norm(Ag.stations[i]["geocentric"] - decay_point[in_view])
 
             # calculate the view angle from the decay points
-            decay_view = geometry.decay_view(decay_point[in_view], Ag.axis, Ag.stations[i]["geocentric"])
+            decay_view = geometry.view_angle(decay_point[in_view], Ag.stations[i]["geocentric"], Ag.axis)
 
             # the zenith and azimuth (measured from East to North) from the station to each decay point
             theta, phi = geometry.obs_zenith_azimuth(Ag.stations[i], decay_point[in_view], decay_point_geodetic[in_view])
 
+            # azimuth measured relative to boresight direction
             phi_from_boresight = (phi - np.deg2rad(Ag.orientations[i]) + np.pi) % (2*np.pi) - np.pi
 
             detector_altitude = Ag.stations[i]["geodetic"][2]/1e3
