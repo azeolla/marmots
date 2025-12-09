@@ -1,5 +1,5 @@
 """
-This module contains constants to be used through marmots.
+This module contains constants to be used throughout marmots.
 """
 
 Re = 6378.0  # earth radius in km.

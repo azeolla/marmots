@@ -59,29 +59,49 @@ class EFieldParam():
         view: np.ndarray
             An array of view angles w.r.t the shower axis (degrees)
         exit_zenith: np.ndarray
-            The zenith angle of the shower (in degrees).
-        decay: np.ndarray
+            The zenith angle of the tau at the exit point (in degrees).
+        decay_altitude: np.ndarray
             The decay altitude of each tau (in km).
+        decay_length: np.ndarray
+            The distance from exit point to decay for each tau (in km).
+        decay_zenith: np.ndarray
+            The zenith angle of the EAS at the decay point (in degrees).
+        decay_azimuth: np.ndarray
+            The azimuth angle of the EAS at the decay point (in degrees).
+        distance_to_decay: np.ndarray
+            Distance from the station to each decay point (in km).
+        detector_altitude: float
+            Station altitude (in km).
+        beacon: np.ndarray
+            Geocentric coordinates of the station.
+        dbeacon: np.ndarray,
+            Distance from the station to each exit point.
         freqs: np.ndarray
-            The frequency band (MHz).
+            Frequencies at which to evaluate the voltage (MHz).
         shower_energy: np.ndarray
             The energy of the shower.
-        gain: float
-            The peak gain [dBi].
-        antennas: int
-            The number of antennas.
+        theta: np.ndarray
+            Observation zenith angle from the perspective of the station.
+        phi: np.ndarray
+            Observation azimuth angle from the perspective of the station.
+        FoV: float,
+            Station field-of-view.
+        detector: class
+            The Detector class (from antenna.py).
 
         Returns
         -------
         Voltage: np.ndarray
-            Returns the voltage (V) evaluated at each view angle.
+            Returns the peak voltage (V) associated with each event.
 
         """
 
         voltage = np.zeros(view.size)
 
+        # these events decay behind the station
         too_far = decay_length > dbeacon
-        
+
+        # these decays occur outside the field-of-view
         outside_fov = ((phi < -FoV/2) | (phi > FoV/2))
         
         cut = np.logical_or(too_far, outside_fov)
@@ -97,6 +117,7 @@ class EFieldParam():
         phi = phi[~cut]
         distance_decay_km = distance_to_decay[~cut]
 
+        # Find the look-up table with the closest altitude (rounding up)
         alt_idx = np.where(self.altitudes >= detector_altitude)[0][0]
          
         # interpolate to find the distance from decay to detector in ZHAireS
@@ -110,19 +131,24 @@ class EFieldParam():
         
         sim_distance_decay_km[sim_distance_decay_km < 0] = 0
 
+        # interpolate sin(VxB) in ZHAireS
         sinVB = interp1d(
             self.zenith_list[alt_idx],
             self.sim_sinVB[alt_idx],
             bounds_error=False,
             fill_value="extrapolate",
         )
+        sim_sinVB = sinVB(exit_zenith)
+        sim_sinVB[sim_sinVB < 0] = 0 # shouldn't ever be negative
 
         sim_sinVB = sinVB(exit_zenith)
 
         sim_sinVB[sim_sinVB < 0] = 0
         
+        # calculate actual sin(VxB)
         mag, sinVB = geomag(self.bfield_grid, self.bfield, beacon, decay_zenith, decay_azimuth)
 
+        # electric field look-up table interpolation
         efields = efield_interp(self.efield_grid[alt_idx], self.values[alt_idx], freqs, decay_altitude, exit_zenith, view)
 
         # calculate the voltage for each event
@@ -134,15 +160,15 @@ class EFieldParam():
         )
 
         # account for ZHAIReS sims only extending to 3.16 deg in view angle
-        #view_factor = np.ones(view.size)
+        view_factor = np.ones(view.size)
 
-        #view_factor[view > 3.16] = np.exp(
-                    #-(view[view > 3.16])**2 / (2 * 3.16)**2
-                #)
+        view_factor[view > 3.16] = np.exp(
+                    -(view[view > 3.16])**2 / (2 * 3.16)**2
+                )
 
-        #voltage[~cut] *= view_factor
+        voltage[~cut] *= view_factor
 
-        # distance correction (ZHAireS distance over Poinsseta distance)
+        # distance correction (ZHAireS distance over MARMOTS distance)
         voltage[~cut] *= (sim_distance_decay_km / distance_decay_km)
 
         # energy scaling
@@ -211,7 +237,7 @@ class EFieldParam():
         self.bfield = geomag_file["bfield"]
 
         for altitude in self.altitudes:
-            interp_file = np.load(self.param_dir + f"/efield_lookup_{str(altitude)}km_v2.npz", allow_pickle=True)
+            interp_file = np.load(self.param_dir + f"/efield_lookup_{str(altitude)}km.npz", allow_pickle=True)
         
             grid = interp_file["grid"]
             self.values.append(interp_file["efield"])
@@ -224,7 +250,6 @@ class EFieldParam():
 
             self.efield_grid.append(CGrid(freqs, grid[1], grid[2], grid[3]))
             self.dist_grid.append(CGrid(grid[1], grid[2], grid[3]))
-            
 
 
 @njit
@@ -305,6 +330,9 @@ def efield_interp(
     # allocate the output array
     out = np.empty((freqs.shape[-1], zenith.shape[-1]), dtype=np.float64)
 
+    clipped = np.copy(view)
+    clipped[view > 3.16] = 3.16 # strange extrapolation beyond 3.16 degrees
+
     # loop over the array
     for i in np.arange(freqs.shape[-1]):
 
@@ -313,14 +341,13 @@ def efield_interp(
             grid,
             values,
             np.column_stack(
-                (np.repeat(freqs[i], zenith.shape[-1]), decay, zenith, view)
-            ),
-            extrap_options.LINEAR
+                (np.repeat(freqs[i], zenith.shape[-1]), decay, zenith, clipped) 
+            )
         )
 
     # and we are done
     return out
-
+    
 
 @njit
 def interp_bfield(
@@ -337,25 +364,22 @@ def interp_bfield(
     grid: CGrid
         The rectangular grid for the interpolation.
     values: np.ndarray
-        The 4D array of values at the grid locations.
-    decay: np.ndarray
-        The decay altitudes to interpolate at (km).
-    zenith: np.ndarray
-        The zenith angles to interpolate at (degrees).
-    view: np.ndarray
-        The view to interpolate at (degrees).
+        The 2D array of values at the grid locations.
+    lat: np.ndarray
+        The latitude to interpolate at (deg).
+    lon: np.ndarray
+        The longitude to interpolate at (deg).
 
     Returns
     -------
-    distance: np.ndarray
-       The distance from decay to detector given the exit zenith angle, decay altitude, and view angle.
+    out: np.ndarray
+       The geomagnetic field at the given latitude and longitude in ENU coordinates.
     """
     # Perform the interpolation
     out = eval_linear(
         grid,
         values,
         np.array([lat, lon]),
-        extrap_options.LINEAR
     )
 
     # and we are done
@@ -365,6 +389,9 @@ def interp_bfield(
 def geomag(
     grid, values, station: np.ndarray, zenith: np.ndarray, azimuth: np.ndarray
 ) -> np.ndarray:
+    """
+    Given the station location, and event geometry, returns the magnetic field strength and sin(VxB).
+    """
     
     B = interp_bfield(grid, values, station[0], station[1])
     

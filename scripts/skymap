@@ -71,6 +71,12 @@ if __name__ == "__main__":
         help="Constant gain over the bandwidth (4) [dBi].",
     )
     parser.add_argument(
+        "--time",
+        type=str,
+        default="2025-03-20 12:00:00",
+        help="The date and time (UTC) to simulate.",
+    )
+    parser.add_argument(
         "--save-plot",
         type=str,
         default=None,
@@ -115,6 +121,7 @@ stations = np.loadtxt(args.stations).T
 
 lat = stations[0]
 lon = stations[1]
+# we will load in actual altitudes
 orientations = stations[3]
 fov = stations[4]
 antennas = stations[5]
@@ -124,7 +131,6 @@ lon = np.atleast_1d(lon)
 orientations = np.atleast_1d(orientations)
 fov = np.atleast_1d(fov)
 antennas = np.atleast_1d(antennas)
-
 altitude = (get_elevation(lat, lon) + 3)/1e3
 
 freqs = np.arange(args.bandwidth[0], args.bandwidth[1], 10)+5
@@ -154,16 +160,22 @@ def pix_loop(i):
         dec[i],
         totalmesh,
         BVH,
+        lat,
+        lon, 
+        altitude,
+        orientations,
+        fov,
+        antennas,
         tauexit,
         voltage,
         taudecay,
         det,
-        antennas,
         np.radians(args.max_view),
         args.ntrials,
         freqs,
         args.trigger,
         np.radians(args.min_elev),
+        args.time,
     )
 
     return results
