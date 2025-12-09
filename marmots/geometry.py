@@ -21,14 +21,9 @@ from numba import jit, njit
 
 __all__ = [
     "view_angle",
-    "altitude",
-    "horizon_angle",
-    "cartesian_to_spherical",
-    "spherical_to_cartesian",
     "geometric_area",
     "obs_zenith_azimuth",
     "decay_zenith_azimuth",
-    "decay_altitude",
     "triangle_random_point",
     "norm",
     "exit_zenith"
@@ -72,18 +67,10 @@ def geometric_area(
         Right ascension of the point source, in degrees.
     dec_deg: float
         Declination of the point source, in degrees.
-    lat_deg: np.ndarray
-        Latitudes of the stations, in degrees.
-    lon_deg: np.ndarray
-        Longitudes of the stations, in degrees.
-    height: np.ndarray
-        Altitudes of the stations, in km.
+    TotalArea: NamedTuple
+        NamedTuple output by mesh.visible_horizon_mesh()
     maxview: float
         Opening angle of the cone projected in the direction of the point source, in radians.
-    orientations: np.ndarray
-       The orientation of each station (in degrees, relative to east).
-    fov: np.ndarray
-       The field-of-view of each station (in degrees).
     antennas: np.ndarray
        The number of phased antennas in each station.
     N: int
@@ -97,10 +84,10 @@ def geometric_area(
     -------
     area: float
         The geometric area A_g in which exit points are generated (km^2).
+    surface: np.ndarray
+        The triangulated surface in view of the stations.
     dot: np.ndarray
         The dot product between exit point location and particle axis.
-    emergence: np.ndarray
-        The emergence angles for each trial (radians).
     stations: np.ndarray
         Geocentric and geodetic coordinates of the valid stations.
     trials: np.ndarray
@@ -143,14 +130,16 @@ def geometric_area(
     source_itrs = coord.transform_to(ITRS(obstime=observing_time))
     x, y, z = source_itrs.x, source_itrs.y, source_itrs.z
     axis = -np.array([x,y,z])
-    
+
+    # find the triangles lying within the max-view angle cone
     in_view = np.zeros(TotalArea.centroids.shape[0], dtype=bool)
     valid = np.zeros(stations_geocentric.shape[0], dtype=bool)
     for i in range(stations_geocentric.shape[0]):
         view = view_angle(TotalArea.centroids, stations_geocentric[i], axis) <= maxview 
         in_view[view] = 1
         valid[i] = np.sum(view) > 0
-    
+
+    # all triangles in view
     surface = TotalArea.triangles[in_view]
     
     stations_geocentric = stations_geocentric[valid]
@@ -158,7 +147,8 @@ def geometric_area(
     orientations = orientations[valid]
     fov = fov[valid]
     antennas = antennas[valid]
-    
+
+    # if there is nothing in view, skip
     if (surface.shape[0] == 0):
 
         return GeometricArea(0, np.array([]), np.array([]), np.array([]), np.array([]), axis, 0, np.array([]), np.array([]), np.array([]))
@@ -166,22 +156,22 @@ def geometric_area(
     else:
         
         A, normals = area(surface)
+        # total area of all in-view triangles
         A0 = np.sum(A)
 
-        # compute the dot product of each trial point with the axis vector
+        # compute the dot product of each triangle's normal vector and the axis vector
         tdot = np.dot(normals, axis)
         
         idx = np.random.choice(np.arange(surface.shape[0]), p=A/np.sum(A), size=N) # randomly pick triangles weighed by their area 
         idx, counts = np.unique(idx, return_counts = True) # count how many times each triangle was picked
         trials = np.concatenate(list(map(triangle_random_point, surface[idx], counts))) # and sample that many points from each triangle
+        # assign to each exit point the dot product corresponding to its triangle
         dot = np.repeat(tdot[idx], counts)
 
         # and mask those trials whose dot product < 0 - since trials are on
         # the surface of the Earth, this would require the RF to propagate
         # through the Earth which is going to render the event undetectable.
         out_earth = dot > 0
-
-        # mask the dot products and view angle
         dot = dot[out_earth]
         
         stations = {}
@@ -191,15 +181,6 @@ def geometric_area(
                    
         # and we are done
         return GeometricArea(A0, surface, dot, stations, trials[out_earth], axis, trials.shape[0], orientations, fov, antennas)
-
-
-def decay_view(
-    decay_point: np.ndarray, axis: np.ndarray, station: np.ndarray,
-) -> np.ndarray:
-
-    d = station - decay_point
-    
-    return np.arccos(np.dot(normalize(d), axis)) 
 
 
 def view_angle(point: np.ndarray, obspoint: np.ndarray, axis: np.ndarray) -> np.ndarray:
@@ -226,54 +207,13 @@ def triangle_random_point(triangle, size):
     return P
 
 
-def rotate_around_axis(vector, axis, theta):
-    """
-    Rotates a vector around 'axis' by 'theta' (in radians).
-    """
-    R = np.empty((3,3))
-    R[0] = np.array([np.cos(theta)+axis[0]**2 * (1-np.cos(theta)), axis[0]*axis[1]*(1-np.cos(theta)) - axis[2]*np.sin(theta),axis[0]*axis[2]*(1-np.cos(theta)) + axis[1]*np.sin(theta)])
-    R[1] = np.array([axis[1]*axis[0]*(1-np.cos(theta)) + axis[2]*np.sin(theta),np.cos(theta)+axis[1]**2 * (1-np.cos(theta)),axis[1]*axis[2]*(1-np.cos(theta)) - axis[0]*np.sin(theta)])
-    R[2] = np.array([axis[2]*axis[0]*(1-np.cos(theta)) - axis[1]*np.sin(theta),axis[2]*axis[1]*(1-np.cos(theta)) + axis[0]*np.sin(theta),np.cos(theta)+axis[2]**2 * (1-np.cos(theta))])
+def exit_zenith(exit_point: np.ndarray, axis: np.ndarray):
     
-    return R @ vector
-
-
-def find_intersection(vector, station):
-    """
-    See: https://diegoinacio.github.io/computer-vision-notebooks-page/pages/ray-intersection_sphere.html
-
-    Calculates where a vector from a station intersects a sphere with Earth's radius.
+    dot = np.dot(normalize(exit_point), axis)
+    zenith = np.arccos(dot)
     
-    note: this assumes that the vector is pointed toward the source
-    """
-    t = np.dot(station, vector)
-    p = station - vector*t
-    d = np.linalg.norm(p)
-
-    height = np.linalg.norm(station)
-    horizon_elev = -np.arccos(Re / height) # the angle from horizontal to the horizon from the station
-    vec_elev = -np.arccos(np.dot(station/height,vector)) + np.pi/2 # the angle from horizontal for the observation vector
-
-    if(vec_elev > horizon_elev):
-        # if the vector points above the horizon, rotate it towards the Earth such that it hits the horizon
-        # this way we do not sample points beyond the visible horizon
-        axis = np.cross(station/height, vector) # axis perpendicular to the station vector and observation vector
-        horizon_vec = rotate_around_axis(vector, axis, -(horizon_elev-vec_elev)) # rotate the observation vector such that it is pointed at the horizon
-        new_t = np.dot(station, horizon_vec)
-        new_p = station - horizon_vec*new_t
-        Ps = new_p
-
-    elif(vec_elev == horizon_elev):
-        # this happens when the vector is tangent to the Earth
-        Ps = p
-
-    else:
-        # find the first point of intersection when the vector passes through the Earth
-        i = np.sqrt(Re**2 - d**2)
-        Ps = station - vector*(t + i)
-        
-    return Ps
-
+    return zenith
+    
 
 def cartesian_to_spherical(point):
     """
@@ -286,98 +226,6 @@ def cartesian_to_spherical(point):
     spherical[:,2] = np.arctan2(point[:,1], point[:,0])
 
     return spherical
-
-
-def project(radius, latitude, longitude):
-    """
-    Performs sinusoidal projection given a sphere's radius, and the latitude and longitude of the point.
-    """
-    lat_dist = np.pi * radius / 180
-    y = latitude * lat_dist 
-    x = longitude * lat_dist * np.cos(np.deg2rad(latitude))
-    return x, y
-
-
-def unproject(point, radius):
-    """
-    Reverse sinusoidal projection.
-    """
-    spherical = np.empty((point.shape[0], 3))
-    
-    lat_dist = np.pi * radius/180
-    latitude = point[:,1]/lat_dist
-    longitude = point[:,0]/lat_dist/np.cos(np.deg2rad(latitude))
-    
-    spherical[:,0] = radius
-    spherical[:,1] = np.deg2rad(90 - latitude)
-    spherical[:,2] = np.deg2rad(longitude)
-    return spherical
-
-
-def horizon_angle(height: np.ndarray, radius: float = Re) -> np.ndarray:
-    """
-    Calculate the horizon angle (in radians)
-    for a given set of heights (in km).
-
-    Parameters
-    ----------
-    height: np.ndarray
-       The height of the viewing point (km).
-    radius: float
-       The Earth radius to use (in radians).
-
-    Returns
-    -------
-    horizon: np.ndarray
-       The horizon angle (in radians).
-    """
-    return -np.arccos((radius) / (radius + height))
-
-
-def spherical_to_cartesian(
-    theta: np.ndarray, phi: np.ndarray, r: np.ndarray = 1.0
-) -> np.ndarray:
-    """
-    Convert an array of (theta, phi, r) points to (N, 3) Cartesian vectors.
-
-    Parameters
-    ----------
-    theta: np.ndarray
-       The polar angle (in radians).
-    phi: np.ndarray
-       The azimuthal angle (in radians)
-    r: np.ndarray
-       The radius of the points (defaults to 1. for unit sphere)
-
-    Returns
-    -------
-    points: np.ndarray
-       A (N, 3) array containing the Cartesian coordinates.
-    """
-
-    # make sure they are both atleast 1D
-    r = np.atleast_1d(r)
-    theta = np.atleast_1d(theta)
-    phi = np.atleast_1d(phi)
-
-    # create the storage for the cartesian points
-    cartesian = np.empty((theta.size, 3))
-
-    # and fill in the values
-    cartesian[:, 0] = r * np.sin(theta) * np.cos(phi)
-    cartesian[:, 1] = r * np.sin(theta) * np.sin(phi)
-    cartesian[:, 2] = r * np.cos(theta)
-
-    # and we are done
-    return cartesian
-
-
-def exit_zenith(exit_point: np.ndarray, axis: np.ndarray):
-    
-    dot = np.dot(normalize(exit_point), axis)
-    zenith = np.arccos(dot)
-    
-    return zenith
 
 
 def decay_zenith_azimuth(decay_point: np.ndarray, axis: np.ndarray) -> np.ndarray:
@@ -415,48 +263,6 @@ def decay_zenith_azimuth(decay_point: np.ndarray, axis: np.ndarray) -> np.ndarra
     azimuth = a + np.pi/2
 
     return zenith, azimuth
-
-
-def decay_altitude(
-    emergence: np.ndarray, decay_length: np.ndarray, thickness: float
-) -> np.ndarray:
-    """
-    Give the emergence angle at the surface, and the decay length,
-    calculate the altitude of the decay point.
-
-
-    Parameters
-    ----------
-    emergence: np.ndarray
-        The emergence angle at the surface (radians)
-    decay_length: np.ndarray
-        The decay length from the surface (in km).
-    thickness: float
-        The ice thickness (in km).
-
-    Returns
-    -------
-    altitude: np.ndarray
-        The altitude of the decay point (km).
-    """
-
-    # calculate the local zenith angle
-    local_zenith = np.pi / 2.0 - emergence
-
-    # the radius at sea-level
-    Rsea = Re + thickness
-
-    # and use the cosine rule to calculate the geocentric distance
-    geocentric = np.sqrt(
-        Rsea ** 2.0
-        + decay_length ** 2.0
-        + 2 * Rsea * decay_length * np.cos(local_zenith)
-    )
-
-    # and convert that into an altitude ASL
-    altitude: np.ndarray = geocentric - Re
-
-    return altitude
 
 
 def obs_zenith_azimuth(

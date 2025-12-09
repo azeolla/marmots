@@ -7,6 +7,10 @@ import marmots.mesh as mesh
 
 
 def line_of_sight(decay_points, station, TotalArea, BVH):
+    """
+    Determines whether or not the line-of-sight between a station and a 
+    decay point is interrupted. 
+    """
     
     origin = TotalArea.center
     
