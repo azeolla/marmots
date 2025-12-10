@@ -98,7 +98,8 @@ def grammage(exitpoint, ints, axis):
 def find_grammage(trials, axis, TotalArea, BVH):
     """
     Given a list of exit points (trials), the particle axis, the triangulated surface mesh, and the bounding volume hierachy, 
-    calculates the amount of grammage traversed for each tau.
+    intersections with the mesh in the backwards direction are found, and the amount of grammage traversed for each tau event
+    is then calculated.
     """
     
     gram = np.zeros(trials.shape[0])

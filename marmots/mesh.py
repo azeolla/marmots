@@ -57,7 +57,7 @@ def build_bvh_tree(triangles, max_triangles_per_node=100):
 @njit
 def intersect_ray_aabb(ray_origin, ray_direction, bounding_box):
     """
-    Determines if a ray intersects a bounding box
+    Determines if a ray intersects a bounding box. Used in the BVH tree intersection algorithm.
     """
     
     t_min = np.divide(bounding_box[0] - ray_origin, ray_direction)
@@ -74,8 +74,9 @@ def intersect_ray_aabb(ray_origin, ray_direction, bounding_box):
 
 def intersect_bvh(root_node, ray_origin, ray_direction):
     """
-    Uses the Bounding Volume Hierarchy to find intersections. Once it gets to the end of tree,
-    it finds the points at which triangles are intersected.
+    Uses the Bounding Volume Hierarchy to find intersections. First it checks for intersections
+    with each bounding box. At the end of the tree, it then checks for intersections with triangles.
+    Outputs the intersection locations. Used in the grammage calculation.
     """
     
     stack = [root_node]
@@ -104,7 +105,7 @@ def intersect_bvh(root_node, ray_origin, ray_direction):
 def triangle_intersections(origin, axis, triangles):
     """
     Fast algorithm for calculating the locations at which a vector (axis) extending 
-    from origin intersects a mesh of triangles.
+    from an origin intersects a mesh of triangles.
     """
 
     e1 = triangles[:,1]-triangles[:,0]
@@ -132,7 +133,7 @@ def triangle_intersections(origin, axis, triangles):
 @njit
 def intersect_segment_aabb(segment_start, segment_end, bounding_box):
     """
-    Determines if a line segment intersects a bounding box
+    Determines if a line segment intersects a bounding box.
     """
     segment_direction = segment_end - segment_start
     inv_dir = 1.0 / segment_direction
@@ -154,8 +155,8 @@ def intersect_segment_aabb(segment_start, segment_end, bounding_box):
 
 def intersect_bvh_with_segment(root_node, segment_start, segment_end):
     """
-    Uses the Bounding Volume Hierarchy to find intersections. In this case, we only care about if intersections
-    occur at all.
+    Uses the Bounding Volume Hierarchy to find intersections. In this case, we use line segments
+    and only care about whether or not intersections occur. Used in the line-of-sight calculation.
     """
     stack = [root_node]
 
@@ -180,7 +181,7 @@ def intersect_bvh_with_segment(root_node, segment_start, segment_end):
 @njit(fastmath=True)
 def triangle_segment_intersections(segment_start, segment_end, triangles):
     """
-    Determines which triangles a line segment intersects.
+    Determines which triangles a line segment intersects. Outputs a list of bool values.
     """
     segment_direction = segment_end - segment_start
     segment_length = np.linalg.norm(segment_direction)

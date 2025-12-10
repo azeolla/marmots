@@ -17,40 +17,16 @@ The recommended method of installation is to first clone the package
 
     $ git clone https://github.com/azeolla/marmots.git
 	
-and then change into the cloned directory and install using `pip`
+To run marmots, you will need to extract the data files:
 
     $ cd marmots
-	$ pip install --user -e .
-    
-To run `marmots`, you will also need a set of parametrized LUT's for the tau exit probability produced using [NuTauSim][https://github.com/harmscho/NuTauSim]]. Please contact the maintainer of this repository for access. This LUT's need to be installed into the `marmots/data/tauexit` directory as shown:
+    $ tar -xvzf data.tar.gz
 
-    tauexit/
-    |-- 0.0km_ice_midCS_stdEL
-    |   |-- LUT_1e+15_eV.npz
-        ...
-    |   `-- LUT_3e+20_eV.npz
-    |-- 1.0km_ice_midCS_stdEL
-    |   |-- LUT_1e+15_eV.npz
-        ...
-    |   `-- LUT_3e+20_eV.npz
-    |-- 2.0km_ice_midCS_stdEL
-    |   |-- LUT_1e+15_eV.npz
-        ...
-    |   `-- LUT_3e+20_eV.npz
-    |-- 3.0km_ice_midCS_stdEL
-    |   |-- LUT_1e+15_eV.npz
-        ...
-    |   `-- LUT_3e+20_eV.npz
-    `-- 4.0km_ice_midCS_stdEL
-        |-- LUT_1e+15_eV.npz
-        ...
-        `-- LUT_3e+20_eV.npz
+To use the topography branch, you will also need to download either all or at least part of the SRTM 30m database. The entire database is ~350 GB. Once you have downloaded the necessary .hgt files, you must specify their path with environment variable SRTM_DATA_DIR. The files should be formatted as {lat}{lon}.hgt, for example: N33W128.hgt.
     
-#### Testing and Development 
-    
-Once the data files are installed, you can verify that the installation was successful by trying to import `marmots`
+Finally, you can install Marmots using pip:
 
-    $ python -c 'import marmots'
+    $ pip install --user -e .
 
 
 ### Usage

@@ -18,6 +18,8 @@ import rasterio
 from rasterio.transform import from_origin
 from pyproj import Transformer
 
+from marmots import srtm_directory
+
 latlon2xyz = Transformer.from_crs("EPSG:4326", "EPSG:4328")
 xyz2latlon = Transformer.from_crs("EPSG:4328", "EPSG:4326")
 sinusoidal = Transformer.from_crs("EPSG:4326", "ESRI:54008")
@@ -39,14 +41,24 @@ TotalArea = NamedTuple(
 
 
 def to_geocentric(lat, lon, height):
+    """
+    Transform geodetic coordinates to geocentric.
+    """
+    
     xyz = np.array(latlon2xyz.transform(lat, lon, height)).T
     return xyz
 
 def to_geodetic(points):
+    """
+    Transform geocentric coordinates to geodetic.
+    """
     latlon = np.array(xyz2latlon.transform(points[:,0], points[:,1], points[:,2])).T
     return latlon
 
 def geocentric2local(points, origin):
+    """
+    Transform geocentric coordinates to local ENU coordinates.
+    """
     
     new = points - origin
     
@@ -63,14 +75,23 @@ def geocentric2local(points, origin):
     return enu
 
 def project(points):
+    """
+    Sinusoidally project lat/lon coordinates.
+    """
     x, y = sinusoidal.transform(points[:,0], points[:,1])
     return x, y
 
 def unproject(x, y):
+    """
+    Reverse sinusoidal projection into lat/lon.
+    """
     lat, lon = inverse_sinusoidal.transform(x, y)
     return lat, lon
 
 def rotation_matrix(axis, theta):
+    """
+    Generates a rotation matrix which rotates a vector by angle theta around axis.
+    """
     R = np.empty((3,3))
     R[0] = np.array([np.cos(theta)+axis[0]**2 * (1-np.cos(theta)), axis[0]*axis[1]*(1-np.cos(theta)) - axis[2]*np.sin(theta),axis[0]*axis[2]*(1-np.cos(theta)) + axis[1]*np.sin(theta)])
     R[1] = np.array([axis[1]*axis[0]*(1-np.cos(theta)) + axis[2]*np.sin(theta),np.cos(theta)+axis[1]**2 * (1-np.cos(theta)),axis[1]*axis[2]*(1-np.cos(theta)) - axis[0]*np.sin(theta)])
@@ -80,7 +101,7 @@ def rotation_matrix(axis, theta):
 
 def lat_lon_to_pixel(latitudes, longitudes, dataset):
     """
-    Convert latitude and longitude arrays to pixel coordinates.
+    Convert latitude and longitude arrays to pixel coordinates. Used for loading SRTM databases.
     """
     # Get the transformation function
     x, y = dataset.bounds.left, dataset.bounds.top
@@ -94,7 +115,7 @@ def lat_lon_to_pixel(latitudes, longitudes, dataset):
 
 def get_elevation_at_lat_lon(lat, lon, dataset):
     """
-    Get elevation at a given latitude and longitude.
+    Get elevation at a given latitude and longitude, according to the input SRTM dataset.
     """
     # Convert latitude and longitude to pixel coordinates
     rows, cols = lat_lon_to_pixel(lat, lon, dataset)
@@ -106,6 +127,10 @@ def get_elevation_at_lat_lon(lat, lon, dataset):
 
 
 def get_elevation(latitudes, longitudes):
+    """
+    Given a list of paired latitudes and longitudes, the function first loads the appropriate SRTM dataset.
+    It then outputs the elevation at each location.
+    """
     elev = np.empty(latitudes.size)
     floored = np.array([np.floor(latitudes), np.floor(longitudes)]).T.astype(int)
     latlon = np.unique(floored, axis=0)
@@ -120,7 +145,7 @@ def get_elevation(latitudes, longitudes):
         else:
             lon = 'W' + str(abs(latlon[i][1])).zfill(3)
             
-        file_path = f"/data2/beacon/srtm30m/{lat}{lon}.hgt"
+        file_path = f"{srtm_directory}/{lat}{lon}.hgt"
         dataset = rasterio.open(file_path)
         
         idx = (floored[:,0] == latlon[i][0]) & (floored[:,1] == latlon[i][1])
@@ -131,10 +156,8 @@ def get_elevation(latitudes, longitudes):
     return elev
 
 def rotate_around_axis(vector, axis, theta):
-    R = np.empty((3,3))
-    R[0] = np.array([np.cos(theta)+axis[0]**2 * (1-np.cos(theta)), axis[0]*axis[1]*(1-np.cos(theta)) - axis[2]*np.sin(theta),axis[0]*axis[2]*(1-np.cos(theta)) + axis[1]*np.sin(theta)])
-    R[1] = np.array([axis[1]*axis[0]*(1-np.cos(theta)) + axis[2]*np.sin(theta),np.cos(theta)+axis[1]**2 * (1-np.cos(theta)),axis[1]*axis[2]*(1-np.cos(theta)) - axis[0]*np.sin(theta)])
-    R[2] = np.array([axis[2]*axis[0]*(1-np.cos(theta)) - axis[1]*np.sin(theta),axis[2]*axis[1]*(1-np.cos(theta)) + axis[0]*np.sin(theta),np.cos(theta)+axis[2]**2 * (1-np.cos(theta))])
+
+    R = rotation_matrix(axis, theta)
     
     return R @ vector
 
@@ -146,15 +169,25 @@ def normalize(vec: np.ndarray):
 
 
 def horizon_mesh(lat, lon, height, orientations, fov, distance=250):
+    """
+    Generates a triangulated surface mesh of the Earth's surface.
+    The position of each station is specified from lat, lon, and height.
+    From each station, topography is loaded in the direction 'orientations' with
+    field-of-view 'fov' and up to distance 'distance'. The union of all these individual meshes is
+    then found.
+    """
 
-    stations_geocentric = to_geocentric(lat, lon, height*1e3)
+    # these functions need height expressed in meters
+    stations_geocentric = to_geocentric(lat, lon, height*1e3) 
     stations_geodetic = np.array([lat, lon, height*1e3]).T
 
     polygons = []
+    # loop over stations
     for i in tqdm(range(stations_geocentric.shape[0])):
         stat = stations_geocentric[i]/np.linalg.norm(stations_geocentric[i])
         east = -np.cross(stat, np.array([0,0,1]))
         east /= np.linalg.norm(east)
+        # this creates a vector pointing from the station in direction orientations[i]
         orientation = rotate_around_axis(east, stat, np.deg2rad(orientations[i]))
         orientation /= np.linalg.norm(orientation)
         angles = np.arange(-fov[i]/2,fov[i]/2+1,0.25)
@@ -163,16 +196,17 @@ def horizon_mesh(lat, lon, height, orientations, fov, distance=250):
         for j in range(angles.shape[0]):
             vectors[j] = rotate_around_axis(orientation, stat, np.deg2rad(angles[j]))
 
-        # Find the elevation at 1 km intervals along each vector
-        vec = distance*normalize(vectors)*1e3
+        # Find the geodetic coordinates of the far arc of the field-of-view
+        vec = distance*normalize(vectors)*1e3 # meters
         llz = to_geodetic(stations_geocentric[i] + vec)
-        z = get_elevation(llz[:,0], llz[:,1])
 
         points = np.zeros((angles.size + 2,2))
         points[0] = stations_geodetic[i][0:2] # the location of the station
 
-        surface = np.array([llz[:,0], llz[:,1], z]).T
-        points[1:-1] = surface[:,0:2]
+        # points along the far arc
+        points[1:-1] = np.array([llz[:,0], llz[:,1]]).T
+
+        # close the circular sector
         points[-1] = stations_geodetic[i][0:2] # the location of the station
 
         # identify areas that cross on the antimeridian. These points need to be moved all to the same side
@@ -184,7 +218,7 @@ def horizon_mesh(lat, lon, height, orientations, fov, distance=250):
         # sinusoidal projection allows us to work in 2D, while conserving the shape's area
         x,y = project(points)
 
-        pp = list(zip(x/1e3,y/1e3))
+        pp = list(zip(x/1e3,y/1e3)) # km's
 
         polygons.append(Polygon(pp).buffer(0))
         
@@ -221,12 +255,16 @@ def horizon_mesh(lat, lon, height, orientations, fov, distance=250):
 
     triangles = np.concatenate(triangles)
 
+    # reverse the sinusoidal projection
     latitude, longitude = unproject(np.concatenate(triangles)[:,0]*1e3, np.concatenate(triangles)[:,1]*1e3)
 
+    # get the elevation at each triangle vertex
     z = get_elevation(latitude, longitude)
 
+    # convert geodetic to geocentric (km)
     cartesian = to_geocentric(latitude, longitude, z).reshape(triangles.shape[0],3,3)/1e3
 
+    # center of each triangle
     centroids = np.mean(cartesian,axis=1)
 
     return TotalArea(cartesian, centroids, np.mean(centroids,axis=0), stations_geocentric/1e3, stations_geodetic, orientations, fov)

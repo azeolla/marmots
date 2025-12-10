@@ -22,6 +22,6 @@ black:
 	# python3 -m mypy marmots
 
 isort:
-	python3 -m isort --atomic -rc -y poinsseta marmots
+	python3 -m isort --atomic -rc -y marmots marmots
 
 # end
