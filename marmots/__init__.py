@@ -8,6 +8,8 @@ __version__ = "0.1.0"
 # the parent marmots directory
 parent = path.dirname(path.dirname(path.abspath(__file__)))
 
+srtm_directory = os.getenv("SRTM_DATA_DIR")
+
 # we use `data` unless the user overrides with marmots_DATA_DIR
 data_directory = os.getenv("MARMOTS_DATA_DIR") or path.join(parent, "data")
 
