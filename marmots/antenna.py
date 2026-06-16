@@ -3,16 +3,15 @@ This module parameterizes the response of BEACON antennas to electric fields.
 """
 import numpy as np
 import pandas as pd
-from typing import Any, Tuple
+from typing import Tuple
+from scipy import interpolate
 
 import marmots.sky as sky
 from marmots.constants import Z_0, c, k_b
 from marmots import data_directory
-from scipy.fft import rfftfreq, irfft
-from numba import jit, njit
-from interpolation.splines import CGrid, eval_linear, extrap_options
 
-#from scipy.fft import irfft
+from numba import njit
+from interpolation.splines import CGrid, eval_linear, extrap_options
 
 
 __all__ = [
@@ -23,32 +22,39 @@ __all__ = [
 ]
  
 class Detector:
-    def __init__(self, model, freqs, gain = None):
+    def __init__(self, model, freqs, gain = None, rot=0):
 
         """
         `model` specifies which model to load. Currently, there is `prototype`, `rhombic`, and `matched`.
         `freqs` specifies which frequencies to evaluate.
         `gain` should be given if using model `matched`.
         """
+        self.rot = rot
         
         if model == "prototype":
-            hpol_gain_file = self.read_xfdtd_gain(
+            hpol_gain_file = read_xfdtd_gain(
             data_directory + "/beacon/beacon_150m_hpol_gain_middle.csv"
                     )
             hpol_csv_freqs = np.unique(hpol_gain_file.freq_MHz.values)
             hpol_theta = np.unique(hpol_gain_file.theta_deg.values)
             hpol_az = np.unique(hpol_gain_file.phi_deg.values)
             self.hpol_gain = hpol_gain_file.G_dBi.values.reshape((hpol_csv_freqs.size, hpol_theta.size, hpol_az.size))
+            self.hpol_phi_gain = hpol_gain_file.Gphi_dBi.values.reshape((hpol_csv_freqs.size, hpol_theta.size, hpol_az.size))
+            self.hpol_theta_gain = hpol_gain_file.Gtheta_dBi.values.reshape((hpol_csv_freqs.size, hpol_theta.size, hpol_az.size))
 
             self.grid = CGrid(hpol_csv_freqs, hpol_theta, hpol_az)
 
-            hpol_impedance = self.read_xfdtd_impedance(data_directory + "/beacon/beacon_150m_hpol_impedance_middle.csv")
+            hpol_impedance = read_xfdtd_impedance(data_directory + "/beacon/beacon_150m_hpol_impedance_middle.csv")
             hpol_impedance_freqs = np.array(hpol_impedance.freq_MHz)
             hpol_impedance_real = np.array(hpol_impedance.RealZ)
             hpol_impedance_imag = np.array(hpol_impedance.ImagZ)
 
-            self.resistance = np.interp(freqs, hpol_impedance_freqs, hpol_impedance_real)
-            self.reactance = np.interp(freqs, hpol_impedance_freqs, hpol_impedance_imag)
+            self.gamma = np.interp(freqs, hpol_impedance_freqs, hpol_impedance.Gamma)
+
+            # self.resistance = np.interp(freqs, hpol_impedance_freqs, hpol_impedance_real)
+            # self.reactance = np.interp(freqs, hpol_impedance_freqs, hpol_impedance_imag)
+            self.resistance = interpolate.interp1d(hpol_impedance_freqs, hpol_impedance_real, fill_value="extrapolate")
+            self.reactance = interpolate.interp1d(hpol_impedance_freqs, hpol_impedance_imag, fill_value="extrapolate")
 
             self.r = 4 # BEACON 4:1 transformer
             self.Z_L = 50.0  # Ohms, the impedance at the load
@@ -86,8 +92,8 @@ class Detector:
 
             self.hpol_gain = gain
 
-            self.resistance = 50
-            self.reactance = 0
+            self.resistance = lambda x: np.ones_like(x) * 50
+            self.reactance = lambda x: np.zeros_like(x)
 
             self.r = 1
             self.Z_L = 50  # Ohms, the impedance at the load
@@ -101,48 +107,18 @@ class Detector:
         else:
             print("Model not supported!")
 
-    def read_xfdtd_gain(self, finame):
-        gain = pd.read_csv(
-            finame,
-            skiprows=1,
-            names=["freq_MHz", "theta_deg", "phi_deg", "phiGain", "thetaGain"],
-            encoding="ISO 8859-1"
-        )
-
-        gain.freq_MHz *= 1000.0  # stored in GHz in csv file, convert to MHz here
-        gtheta = gain.thetaGain  # dBi
-        gphi = gain.phiGain  # dBi
-
-        G = np.sqrt(gtheta ** 2 + gphi ** 2)
-        gain["G_dBi"] = 10.0 * np.log10(G)
-
-        return gain
-
-    def read_xfdtd_impedance(self, finame, Z0=50.0):
-        impedance = pd.read_csv(
-            finame, names=["freq_MHz", "RealZ", "ImagZ"], dtype=float, skiprows=1
-        )
-
-        impedance[
-            "freq_MHz"
-        ] *= 1000.0  # stored in GHz in csv file, convert to MHz here
-        impedance["Z"] = impedance.RealZ + 1j * impedance.ImagZ
-        impedance["Gamma"] = (impedance.Z - Z0) / (impedance.Z + Z0)
-        impedance["S11"] = 20.0 * np.log10(abs(impedance.Gamma))
-        return impedance
-
     def effective_height(self, freqs) -> np.ndarray:
         """
         Calculates the antenna effective height at each frequency.
         """
             
-        h_eff = 4.0 * self.resistance / Z_0 * (c/freqs)**2 / 4.0 / np.pi 
+        h_eff = 4.0 * self.resistance(freqs) / Z_0 * (c / freqs)**2 / 4.0 / np.pi
         
         P_div = ((1/self.r) 
             * (self.r * np.abs(self.Z_L)) ** 2
             / np.abs(
-                self.resistance
-                + 1j * self.reactance
+                self.resistance(freqs)
+                + 1j * self.reactance(freqs)
                 + self.r * self.Z_L)
             ** 2)
         
@@ -221,6 +197,108 @@ class Detector:
         df = freqs[1]-freqs[0]
         
         return np.sqrt(np.sum(df*noise))
+
+
+    def vel(
+        self, freqs: np.ndarray, theta: np.ndarray, phi: np.ndarray
+    ) -> np.ndarray:
+        """
+        Given a peak electric field (in V/m), calculate the voltage seen
+        at the load of the BEACON antenna.
+
+        See any RF or antenna textbook for a derivation of this.
+
+        Parameters
+        ----------
+        freqs: np.ndarray
+            The frequencies (in MHz) at which to evaluate.
+        theta: np.ndarray
+            The observation zenith angle (in degrees).
+        phi: np.ndarray
+            The observation azimuth angle (in degrees).
+
+        Returns
+        -------
+        vel: dict
+            Get vel for freq, theta, and phi for the two polarizations
+        """
+        d = {}
+        for key, gain in zip(["theta", "phi"], [self.hpol_theta_gain, self.hpol_phi_gain]):
+            # check if gain is an array for just a single value
+            if type(gain) == np.ndarray:
+
+
+                # calculate the linear gain - `gain` must be power gain.
+                D = directivity(self.grid, gain, freqs, theta, phi)
+
+                G = 10 ** (D / 10.0)
+                x = self.effective_height(freqs) * np.sqrt(G.T)
+
+            else:
+
+                G = 10 ** (gain / 10.0)
+
+                x = self.effective_height(freqs) * np.sqrt(G)
+
+            d[key] = np.squeeze(x)
+
+        return d
+
+    def vel2(self, freqs: np.ndarray, theta: float, phi: float):
+        """ Get realized vector effective length
+
+        Parameters
+        ----------
+        freqs: array
+            Frequency in MHz
+        theta: float
+            In degree
+        phi: float
+            In degree
+        """
+
+        # account for antenna rotation
+        phi -= self.rot
+        if phi < 0:
+            phi += 360
+
+        # necessary to use `directivity`
+        theta = np.ascontiguousarray(theta, dtype=np.float64)
+        phi = np.ascontiguousarray(phi, dtype=np.float64)
+
+        return self.vel(freqs, theta, phi)
+
+def read_xfdtd_gain(finame):
+    gain = pd.read_csv(
+        finame,
+        skiprows=1,
+        names=["freq_MHz", "theta_deg", "phi_deg", "phiGain", "thetaGain"],
+        encoding="ISO 8859-1"
+    )
+
+    gain.freq_MHz *= 1000.0  # stored in GHz in csv file, convert to MHz here
+    gtheta = gain.thetaGain
+    gphi = gain.phiGain
+
+    G = np.sqrt(gtheta ** 2 + gphi ** 2)
+    gain["G_dBi"] = 10.0 * np.log10(G)
+    gain["Gtheta_dBi"] = 10.0 * np.log10(gtheta)
+    gain["Gphi_dBi"] = 10.0 * np.log10(gphi)
+
+    return gain
+
+def read_xfdtd_impedance(finame, Z0=50.0):
+    impedance = pd.read_csv(
+        finame, names=["freq_MHz", "RealZ", "ImagZ"], dtype=float, skiprows=1
+    )
+
+    impedance[
+        "freq_MHz"
+    ] *= 1000.0  # stored in GHz in csv file, convert to MHz here
+    impedance["Z"] = impedance.RealZ + 1j * impedance.ImagZ
+    impedance["Gamma"] = (impedance.Z - Z0) / (impedance.Z + Z0)
+    impedance["S11"] = 20.0 * np.log10(abs(impedance.Gamma))
+    return impedance
 
 
 @njit
