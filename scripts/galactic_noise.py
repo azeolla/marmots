@@ -7,7 +7,7 @@ from marmots import antenna, galactic_noise
 
 
 MOUNTAIN_TEMPERATURE = 300
-TRACE_LENGTH = 2048 * 10
+TRACE_LENGTH = 2048 * 5
 location = (-35.10, -69.55)  # Auger in lat, long (degrees)
 
 CONFIGS = [
@@ -16,7 +16,7 @@ CONFIGS = [
         "interpolation_frequencies": np.linspace(30, 80, 20),
         "sampling_rate": 200,
         "passband": [30, 80],
-        "n_side": 16,
+        "n_side": 8,
         "ele_temps": [300, 100],
         "ants": [
             antenna.Detector(model="prototype", freqs=np.linspace(30, 80, 10)),

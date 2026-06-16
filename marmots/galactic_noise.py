@@ -24,7 +24,7 @@ logger = logging.getLogger()
 
 # This is the maximum number caching entries for the vector effective length and
 # noise temperature.
-maxsize = 1024 * 16
+maxsize = 1024 * 4
 
 degree = np.pi / 180  # converts deg to rad
 
