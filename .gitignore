@@ -10,7 +10,7 @@ data/Skymaps
 
 # ignore any generated figures
 tests/figures/*
-
+stations
 # ignore the paper directory
 paper/
 
@@ -136,7 +136,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
-
+.marmots
 # Spyder project settings
 .spyderproject
 .spyproject
