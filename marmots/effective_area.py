@@ -1,8 +1,8 @@
 """
 This module provides the high-level event loop to calculate
-the tau point source effective area.
+the tau point source effective area. 
+Modification from the original; it takes into account the tau propagation through terrain, using the TauSurvLUT class and the propagate_tracks function.
 """
-#from typing import Any, Union
 
 import numpy as np
 
@@ -11,6 +11,7 @@ import marmots.geometry as geometry
 import marmots.grammage as grammage
 import marmots.decay as decay
 import marmots.topography as topography
+from marmots.tau_propagator import TauSurvLUT, propagate_tracks
 
 
 def calculate(
@@ -19,7 +20,7 @@ def calculate(
     totalmesh,
     BVH,
     lat: np.ndarray,
-    lon: np.ndarray, 
+    lon: np.ndarray,
     altitude: np.ndarray,
     orientations: np.ndarray,
     fov: np.ndarray,
@@ -28,50 +29,55 @@ def calculate(
     voltage,
     taudecay,
     detector,
+    psurvival_lut: TauSurvLUT = None,
     maxview: float = np.radians(3.0),
     N: int = 1_000_000,
-    freqs: np.ndarray = np.arange(30,80,10)+5,
+    freqs: np.ndarray = np.arange(30, 80, 10) + 5,
     trigger_SNR: float = 5.0,
     min_elev: float = np.deg2rad(-30),
-    time: str = '2025-03-20 12:00:00'
+    time: str = '2025-03-20 12:00:00',
+    tau_prop_model: int = 0,
 ) -> np.ndarray:
-
     """
-    Calculate the effective area of BEACON to a point source
-    tau flux.
+    Calculate the effective area of an observatory to a point source tau flux.
 
     Parameters
     ----------
     ra: float
-       Right ascension of the point source.
+        Right ascension of the point source.
     dec: float
-       Declination of the point source.
+        Declination of the point source.
     totalmesh: NamedTuple
         Output of topography.horizon_mesh
     BVH: class
         Bounding Volume Hierarchy (from mesh.py)
     lat: np.ndarray
-       Latitudes of the phased arrays (degrees).
+        Latitudes of the phased arrays (degrees).
     lon: np.ndarray
-       Longitudes of the phased arrays (degrees).
+        Longitudes of the phased arrays (degrees).
     altitude: np.ndarray
-       The altitudes of the phased arrays (in km).
+        The altitudes of the phased arrays (in km).
     orientations: np.ndarray
-       The orientation of each phased array (in degrees, relative to east).
+        The orientation of each phased array (in degrees, relative to east).
     fov: np.ndarray
-       The field-of-view of each phased array (in degrees).
+        The field-of-view of each phased array (in degrees).
     antennas: np.ndarray
-       The number of phased antennas in each phased array.
+        The number of phased antennas in each phased array.
     tauexit: class
         The appropriate TauExitLUT class (from tauexit.py).
     voltage: class
-       The EFieldParam class (from efield.py).
+        The EFieldParam class (from efield.py).
     taudecay: class
-       The DecayParticle class (from pythia.py).
+        The DecayParticle class (from pythia.py).
     detector: class
         The Detector class (from antenna.py).
+    psurvival_lut: TauSurvLUT, optional
+        Look-Up Table for tau survival probability in rock (from tau_propagator.py).
+        If None, it is instantiated automatically from the default file.
+        Pass an already-loaded instance when calling calculate() in a loop
+        to avoid reloading the file on every call.
     maxview: float
-        The maximum view angle (in radians). This is the opening angle of the cone projected towards the point source.
+        The maximum view angle (in radians).
     N: int
         The number of trials (exit points) to generate.
     freqs: np.ndarray
@@ -80,105 +86,145 @@ def calculate(
     trigger_SNR: float
         The voltage SNR needed for a trigger.
     min_elev: float
-        Elevation angles below this threshold will not be simulated. Effective area will be assumed to be zero.
+        Elevation angles below this threshold will not be simulated.
     time: str
         The time in which to calculate the instantaneous effective area.
+    tau_prop_model: int
+        Energy loss model for tau propagation through rock: 0=ALLM (default), 1=ASW.
 
     Returns
     -------
-    Aeff: EffectiveArea
-        A collection of effective area components at the specified right ascension and declination.
+    Aeff: np.ndarray
+        A collection of effective area components at the specified ra and dec:
+        [geometric, pexit, pdet, effective_area, coincidence_frac]
     """
 
-    #begin = time.time()
+    # load the survival LUT if not provided externally
+    if psurvival_lut is None:
+        psurvival_lut = TauSurvLUT()
 
-    # compute the geometric area associated with a point source at the desired ra and dec
+    # compute the geometric area associated with a point source
     Ag = geometry.geometric_area(
-        ra, dec, totalmesh, maxview, antennas, N=N,min_elev=min_elev, time=time
-        )
+        ra, dec, totalmesh, maxview, antennas, N=N, min_elev=min_elev, time=time
+    )
 
     if Ag.N == 0:
-        geometric = 0
-        pexit = 0
-        pdet = 0
-        effective_area = 0
+        geometric        = 0
+        pexit            = 0
+        pdet             = 0
+        effective_area   = 0
         coincidence_frac = np.nan
+
     else:
-        
-        # determine the grammage associated with each exit point
-        # interpolate that grammage into an exit angle so that the tauexit LUT can be used
+
+        # determine the grammage and convert to exit angle for the LUT
         exit_theta = grammage.find_exit_angle(Ag.trials, Ag.axis, totalmesh, BVH)
-        
-        # get the exit probability at these elevation angles
-        # this is a masked array and will be masked
-        # if no tau's exitted at these angles
+
+        # exit probability and tau energy at exit point
         Pexit, Etau = tauexit(exit_theta)
 
-        # get a random set of decay lengths at these energies
+        # initial decay length and shower energy — sampled with energy at exit
         decay_length = taudecay.sample_range(Etau)
+        Eshower      = taudecay.shower_energy(Etau)
 
-        # and then sample the energy of the tau's
-        Eshower = taudecay.shower_energy(Etau)
+        # initial decay point
+        decay_point = Ag.trials + (Ag.axis[:, None] * decay_length).T
 
-        # location of each decay
-        decay_point = Ag.trials + (Ag.axis[:,None] * decay_length).T
-        
-        decay_point_geodetic = topography.to_geodetic(decay_point*1e3)
+        # ----------------------------------------------------------------
+        # TAU PROPAGATION: correct tracks that cross terrain
+        # ----------------------------------------------------------------
 
-        # and get the altitude at the decay points
-        decay_altitude = decay_point_geodetic[:,2]/1e3
+        # check which tracks have terrain between exit and decay point
+        path_blocked = ~decay.tau_path_clear(
+            Ag.trials, decay_point, totalmesh, BVH
+        )  # shape (N,), True where terrain is crossed
 
-        # get the zenith angle at the exit points
-        exit_zenith = geometry.exit_zenith(Ag.trials, Ag.axis)
+        if np.any(path_blocked):
 
+            # propagate blocked tracks through terrain segments:
+            #   - compute Psurv_tot = prod(Psurv_air_i * Psurv_rock_i)
+            #   - compute E_final after all rock energy losses
+            #   - re-sample decay point in last air segment with E_final
+            Psurv_tot, E_final, decay_point_new = propagate_tracks(
+                Ag.trials[path_blocked],
+                decay_point[path_blocked],
+                Etau[path_blocked],
+                totalmesh,
+                BVH,
+                psurvival_lut,
+                taudecay,
+                Ag.axis,
+                model=tau_prop_model,
+            )
+
+            # update Pexit with terrain survival probability weight
+            Pexit[path_blocked] *= Psurv_tot
+
+            # update shower energy and decay point with corrected quantities
+            Eshower[path_blocked]     = taudecay.shower_energy(E_final)
+            decay_point[path_blocked] = decay_point_new
+
+            # recompute decay_length for blocked tracks
+            # (needed downstream by voltage())
+            decay_length[path_blocked] = np.linalg.norm(
+                decay_point[path_blocked] - Ag.trials[path_blocked], axis=1
+            )
+
+        # ----------------------------------------------------------------
+        # rest of the calculation — unchanged from original
+        # ----------------------------------------------------------------
+
+        decay_point_geodetic = topography.to_geodetic(decay_point * 1e3)
+        decay_altitude       = decay_point_geodetic[:, 2] / 1e3
+
+        exit_zenith                 = geometry.exit_zenith(Ag.trials, Ag.axis)
         decay_zenith, decay_azimuth = geometry.decay_zenith_azimuth(decay_point, Ag.axis)
 
-        # calculate the RMS of the antenna noise
-        vrms = detector.Vrms(freqs)
-
-        # number of stations
+        vrms       = detector.Vrms(freqs)
         n_stations = len(Ag.stations)
+        triggers   = np.zeros(Ag.trials.shape[0])
 
-        triggers = np.zeros(Ag.trials.shape[0])
-
-        # iterate over stations
         for i in range(n_stations):
 
-            # the view angle between the station and the exit points
-            ground_view = geometry.view_angle(Ag.trials, Ag.stations[i]["geocentric"], Ag.axis) 
+            ground_view = geometry.view_angle(
+                Ag.trials, Ag.stations[i]["geocentric"], Ag.axis
+            )
 
             trigger = np.zeros(Ag.trials.shape[0])
-
-            # select relevant events
             in_view = ground_view <= maxview
 
-            # determine line-of-sight between decay points and the station
-            LoS = decay.line_of_sight(decay_point[in_view], Ag.stations[i]["geocentric"], totalmesh, BVH)
-            
+            # line-of-sight: decay point → station
+            LoS = decay.line_of_sight(
+                decay_point[in_view], Ag.stations[i]["geocentric"], totalmesh, BVH
+            )
             in_view[in_view] = LoS
 
-            # if no decays are in view, skip
             if np.sum(in_view) == 0:
                 continue
 
-            # distance from station to decay point
-            distance_to_decay = geometry.norm(Ag.stations[i]["geocentric"] - decay_point[in_view])
+            distance_to_decay = geometry.norm(
+                Ag.stations[i]["geocentric"] - decay_point[in_view]
+            )
 
-            # calculate the view angle from the decay points
-            decay_view = geometry.view_angle(decay_point[in_view], Ag.stations[i]["geocentric"], Ag.axis)
+            decay_view = geometry.view_angle(
+                decay_point[in_view], Ag.stations[i]["geocentric"], Ag.axis
+            )
 
-            # the zenith and azimuth (measured from East to North) from the station to each decay point
-            theta, phi = geometry.obs_zenith_azimuth(Ag.stations[i], decay_point[in_view], decay_point_geodetic[in_view])
+            theta, phi = geometry.obs_zenith_azimuth(
+                Ag.stations[i], decay_point[in_view], decay_point_geodetic[in_view]
+            )
 
-            # azimuth measured relative to boresight direction
-            phi_from_boresight = (phi - np.deg2rad(Ag.orientations[i]) + np.pi) % (2*np.pi) - np.pi
+            phi_from_boresight = (
+                phi - np.deg2rad(Ag.orientations[i]) + np.pi
+            ) % (2 * np.pi) - np.pi
 
-            detector_altitude = Ag.stations[i]["geodetic"][2]/1e3
+            detector_altitude = Ag.stations[i]["geodetic"][2] / 1e3
 
-            dbeacon = geometry.norm(Ag.stations[i]["geocentric"] - Ag.trials[in_view])
+            dobservatory = geometry.norm(
+                Ag.stations[i]["geocentric"] - Ag.trials[in_view]
+            )
 
-            # compute the voltage at each of these off-axis angles and at each frequency
-            V = voltage(
+            V= voltage(
                 np.rad2deg(decay_view),
                 np.rad2deg(exit_zenith[in_view]),
                 decay_altitude[in_view],
@@ -188,36 +234,33 @@ def calculate(
                 distance_to_decay,
                 detector_altitude,
                 Ag.stations[i]["geodetic"],
-                dbeacon,
+                dobservatory,
                 freqs,
                 Eshower[in_view],
                 np.rad2deg(theta),
                 np.rad2deg(phi_from_boresight),
                 Ag.fov[i],
                 detector,
+                decay_point[in_view],
+                Ag.stations[i]["geocentric"],
             )
 
-            # calculate the SNR
+            # SNR: max over frequency bins for the trigger decision
             SNR = np.sqrt(Ag.antennas[i]) * (V / vrms)
-
-            # and check for a trigger
+            #print(f"V shape: {V.shape}, SNR shape: {SNR.shape}, in_view sum: {np.sum(in_view)}")
             trigger[in_view] = SNR > trigger_SNR
+            triggers         = triggers + trigger
 
-            triggers = triggers + trigger
-
-        coincidences = np.sum(triggers > 1) # events which trigger more than one station
-        Pdet = triggers > 0
+        coincidences = np.sum(triggers > 1)
+        Pdet         = triggers > 0
         num_triggers = np.sum(Pdet)
 
-        # and save the various effective area coefficients at these angles
-        geometric = (Ag.area * np.sum(Ag.dot)) / Ag.N
-        pexit = np.mean(Pexit)
-        pdet = np.mean(Pdet)
+        geometric      = (Ag.area * np.sum(Ag.dot)) / Ag.N
+        pexit          = np.mean(Pexit)
+        pdet           = np.mean(Pdet)
         effective_area = np.sum(Ag.area * Ag.dot * Pexit * Pdet) / Ag.N
-        with np.errstate(divide='ignore', invalid='ignore'):
-            coincidence_frac = coincidences/num_triggers
 
-    #end = time.time()
-    # and now return the computed parameters
+        with np.errstate(divide='ignore', invalid='ignore'):
+            coincidence_frac = coincidences / num_triggers
+
     return np.array([geometric, pexit, pdet, effective_area, coincidence_frac])
-    #return end - begin
