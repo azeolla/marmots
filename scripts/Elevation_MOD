@@ -1,0 +1,380 @@
+#!/usr/bin/env python3
+"""
+HERON effective area vs elevation angle WITH topography.
+
+Saves one .npy file per energy with columns:
+    [minutes_from_t0, mean_elevation_deg, effective_area_km2]
+
+Usage example:
+    python heron_area_vs_elevation.py \
+        --energies 0.1 1.0 10.0 100.0 \
+        --stations heron_stations.txt \
+        --ntrials 10000 \
+        --trigger 5 \
+        --elev-window-min -20 \
+        --elev-window-max -5 \
+        --ntimes 80 \
+        --min-elev -30 \
+        --outdir outputs/heron_topo
+"""
+
+import argparse
+import os
+import numpy as np
+
+from astropy.time import Time
+from astropy.coordinates import SkyCoord, EarthLocation, AltAz
+import astropy.units as u
+from scipy.optimize import root_scalar, brentq
+
+import marmots.effective_area as effective_area
+from marmots.tauexit import TauExitLUT
+from marmots.efield import EFieldParam
+from marmots.pythia import Tau_Decay_Simulator
+from marmots.antenna import Detector
+from marmots.topography import horizon_mesh, get_elevation
+from marmots.mesh import create_BVH_tree
+
+
+# =======================
+# AVAILABLE LUT ENERGIES
+# =======================
+
+AVAILABLE_LUTS = np.array([
+    1e15, 3e15,
+    1e16, 3e16,
+    1e17, 3e17,
+    1e18, 3e18,
+    1e19, 3e19,
+    1e20, 3e20
+])
+
+
+# =======================
+# ARGUMENTS
+# =======================
+
+parser = argparse.ArgumentParser(
+    description="HERON effective area vs elevation angle with topography."
+)
+parser.add_argument(
+    "--energies", type=float, nargs="+", required=True,
+    help="Neutrino energies in EeV (e.g. 0.1 1.0 10.0). "
+         "Must match available LUT energies."
+)
+parser.add_argument(
+    "--stations", required=True,
+    help="Path to station file (columns: lat lon alt orientation fov antennas)."
+)
+parser.add_argument(
+    "--ntrials", type=int, required=True,
+    help="Number of Monte Carlo trials per time step."
+)
+parser.add_argument(
+    "--trigger", type=float, default=5.0,
+    help="SNR trigger threshold (default: 5)."
+)
+parser.add_argument(
+    "--bandwidth", type=int, nargs=2, default=[30, 80],
+    help="Frequency bandwidth in MHz: low high (default: 30 80)."
+)
+parser.add_argument(
+    "--max-view", type=float, default=3.0,
+    help="Maximum viewing angle from Cherenkov cone in degrees (default: 3)."
+)
+parser.add_argument(
+    "--min-elev", type=float, default=-30.0,
+    help="Minimum source elevation passed to effective_area.calculate (default: -30)."
+)
+parser.add_argument(
+    "--model", type=str,
+    choices=["prototype", "matched", "rhombic"],
+    default="prototype",
+    help="Antenna model (default: prototype)."
+)
+parser.add_argument(
+    "--gain", type=float, default=4.0,
+    help="Antenna gain in dBi (default: 4)."
+)
+parser.add_argument(
+    "--ra", type=float, default=0.0,
+    help="Source right ascension in degrees (default: 0)."
+)
+parser.add_argument(
+    "--dec", type=float, default=0.0,
+    help="Source declination in degrees (default: 0)."
+)
+parser.add_argument(
+    "--time", type=str, default="2025-03-20 00:00:00",
+    help="Reference UTC time used as search anchor (default: 2025-03-20 00:00:00)."
+)
+
+parser.add_argument(
+    "--elev-window-min", type=float, default=-8.0,
+    help="Lower bound of the elevation window in degrees (default: -20). "
+         "Only time steps where the source elevation is >= this value are evaluated."
+)
+parser.add_argument(
+    "--elev-window-max", type=float, default=5.0,
+    help="Upper bound of the elevation window in degrees (default: 5). "
+         "Only time steps where the source elevation is <= this value are evaluated."
+)
+
+parser.add_argument(
+    "--ntimes", type=int, default=60,
+    help="Number of time steps sampled *within* the elevation window (default: 60)."
+)
+parser.add_argument(
+    "--search-window", type=float, default=24.0,
+    help="Hours around --time to search for the elevation window (default: 24)."
+)
+parser.add_argument(
+    "--outdir", type=str,
+    help="Output directory for .npy files."
+)
+
+
+args = parser.parse_args()
+os.makedirs(args.outdir, exist_ok=True)
+
+# Sanity check  # NEW
+if args.elev_window_min >= args.elev_window_max:
+    raise ValueError(
+        f"--elev-window-min ({args.elev_window_min}) must be "
+        f"less than --elev-window-max ({args.elev_window_max})."
+    )
+
+
+# =======================
+# LOAD STATIONS
+# =======================
+
+print("Loading stations...")
+stations = np.loadtxt(args.stations).T
+
+lat          = np.atleast_1d(stations[0])
+lon          = np.atleast_1d(stations[1])
+orientations = np.atleast_1d(stations[3])
+fov          = np.atleast_1d(stations[4])
+antennas     = np.atleast_1d(stations[5])
+
+# Ground elevation + 3 m above ground, converted to km
+altitude = np.atleast_1d(stations[2])
+
+freqs = np.arange(args.bandwidth[0], args.bandwidth[1], 10) + 5
+
+print(f"  Loaded {len(lat)} station(s).")
+print(f"  Mean lat={np.mean(lat):.3f}°  lon={np.mean(lon):.3f}°  alt={np.mean(altitude)*1e3:.0f} m")
+
+
+# =======================
+# BUILD TOPOGRAPHIC MESH
+# =======================
+
+print("\nGenerating topographic mesh...")
+totalmesh = horizon_mesh(lat, lon, altitude, orientations, fov)
+
+print("Building BVH tree...")
+BVH = create_BVH_tree(totalmesh)
+
+
+# =======================
+# PHYSICS OBJECTS
+# =======================
+
+voltage  = EFieldParam()
+taudecay = Tau_Decay_Simulator(pol="negative")
+det      = Detector(args.model, freqs, args.gain)
+
+
+# =======================
+# SOURCE & TIME SETUP  
+# =======================
+
+source_coord = SkyCoord(ra=args.ra * u.deg, dec=args.dec * u.deg)
+
+central_loc = EarthLocation(
+    lat=np.mean(lat)         * u.deg,
+    lon=np.mean(lon)         * u.deg,
+    height=np.mean(altitude) * u.km
+)
+
+t_anchor = Time(args.time)
+
+def source_elevation(dt_hour):
+    """Return source elevation in degrees at t_anchor + dt_hour."""
+    t_try = t_anchor + dt_hour * u.hour
+    altaz = source_coord.transform_to(
+        AltAz(obstime=t_try, location=central_loc)
+    )
+    return altaz.alt.deg
+
+
+# We scan a coarse grid to locate the bracket, then refine with brentq.
+print(f"\nSearching for elevation window "
+      f"[{args.elev_window_min:.1f}°, {args.elev_window_max:.1f}°] "
+      f"within ±{args.search_window/2:.0f} h of {args.time} ...")
+
+half_search = args.search_window / 2.0
+coarse_dt   = np.linspace(-half_search, half_search, 2000)
+coarse_elev = np.array([source_elevation(dt) for dt in coarse_dt])
+
+# Mask of hours inside the elevation window
+inside = (coarse_elev >= args.elev_window_min) & (coarse_elev <= args.elev_window_max)
+
+if not np.any(inside):
+    raise RuntimeError(
+        f"The source never enters the elevation window "
+        f"[{args.elev_window_min:.1f}°, {args.elev_window_max:.1f}°] "
+        f"within ±{half_search:.0f} h of {args.time}.\n"
+        f"Elevation range found: [{coarse_elev.min():.1f}°, {coarse_elev.max():.1f}°].\n"
+        f"Try widening --search-window or adjusting the elevation bounds."
+    )
+
+# The window might appear more than once per day (rising + setting).
+# We take the *first* continuous block.
+idx_inside  = np.where(inside)[0]
+# Detect gaps > 1 step to find separate blocks
+gaps        = np.where(np.diff(idx_inside) > 1)[0]
+if len(gaps) > 0:
+    first_block = idx_inside[: gaps[0] + 1]
+    print(f"  NOTE: source enters the window {len(gaps)+1} time(s); "
+          f"using the first occurrence.")
+else:
+    first_block = idx_inside
+
+dt_enter_approx = coarse_dt[first_block[0]]
+dt_exit_approx  = coarse_dt[first_block[-1]]
+
+# Refine entry / exit times with brentq  # NEW
+def f_enter(dt):
+    return source_elevation(dt) - args.elev_window_min
+
+def f_exit(dt):
+    return source_elevation(dt) - args.elev_window_max
+
+# Entry: source crosses elev_window_min going up (or elev_window_max going down).
+# We determine direction from the coarse data.
+elev_enter = coarse_elev[first_block[0]]
+elev_exit  = coarse_elev[first_block[-1]]
+
+# Use a small bracket around the approximate crossing  # CHANGED
+bracket_margin = (coarse_dt[1] - coarse_dt[0]) * 3   # 3 coarse steps
+
+try:
+    # Entry crossing: source elevation == elev_window_min
+    sol_enter = brentq(
+        f_enter,
+        coarse_dt[max(first_block[0] - 3, 0)],
+        coarse_dt[min(first_block[0] + 3, len(coarse_dt) - 1)]
+    )
+except ValueError:
+    sol_enter = dt_enter_approx
+
+try:
+    # Exit crossing: source elevation == elev_window_max  (if source rises into window)
+    # or elev_window_min (if source falls out).  Use the coarser boundary.
+    sol_exit = brentq(
+        f_exit,
+        coarse_dt[max(first_block[-1] - 3, 0)],
+        coarse_dt[min(first_block[-1] + 3, len(coarse_dt) - 1)]
+    )
+except ValueError:
+    sol_exit = dt_exit_approx
+
+# Ensure ordering  # NEW
+if sol_enter > sol_exit:
+    sol_enter, sol_exit = sol_exit, sol_enter
+
+print(f"  Elevation window: "
+      f"t_anchor + {sol_enter:+.3f} h  →  t_anchor + {sol_exit:+.3f} h "
+      f"(duration {(sol_exit - sol_enter)*60:.1f} min)")
+
+# Build the final time array *inside* the window  # CHANGED
+dt_hours = np.linspace(sol_enter, sol_exit, args.ntimes)
+times    = t_anchor + dt_hours * u.hour
+minutes  = dt_hours * 60.0   # minutes relative to t_anchor
+
+
+# =======================
+# ENERGY LOOP
+# =======================
+
+print(f"\nWill simulate {len(times)} time steps "
+      f"({args.ntrials} trials each).\n")
+
+for Enu_EeV in args.energies:
+
+    Enu_eV = Enu_EeV * 1e18
+
+    # Check that a LUT exists for this energy
+    lut_match = np.isclose(AVAILABLE_LUTS, Enu_eV, rtol=1e-3)
+    if not np.any(lut_match):
+        print(f"[SKIP] No LUT available for {Enu_EeV:.2e} EeV "
+              f"(= {Enu_eV:.2e} eV). Available: {AVAILABLE_LUTS}")
+        continue
+
+    print(f"===== Energy: {Enu_EeV:.2e} EeV =====")
+
+    tauexit = TauExitLUT(energy=Enu_eV, thickness=0)
+
+    mean_elevations = []
+    effective_areas = []
+
+    for i, t in enumerate(times):
+
+        # Source elevation at this time
+        altaz = source_coord.transform_to(
+            AltAz(obstime=t, location=central_loc)
+        )
+        elev_deg = altaz.alt.deg
+        mean_elevations.append(elev_deg)
+
+        # Effective area calculation
+        res = effective_area.calculate(
+            ra=args.ra,
+            dec=args.dec,
+            totalmesh=totalmesh,
+            BVH=BVH,
+            lat=lat,
+            lon=lon,
+            altitude=altitude,
+            orientations=orientations,
+            fov=fov,
+            antennas=antennas,
+            tauexit=tauexit,
+            voltage=voltage,
+            taudecay=taudecay,
+            detector=det,
+            psurvival_lut=None,
+            maxview=np.radians(args.max_view),
+            N=args.ntrials,
+            freqs=freqs,
+            trigger_SNR=args.trigger,
+            min_elev=np.radians(args.min_elev),
+            time=t.iso
+        )
+
+        area = np.max(res[3])
+        effective_areas.append(area)
+
+        print(f"  [{i+1:03d}/{args.ntimes}] "
+              f"t={minutes[i]:+7.1f} min  "
+              f"elev={elev_deg:+7.2f}°  "
+              f"A_eff={area:.4e} km²")
+
+    # Save results
+    tag      = f"{Enu_EeV:.2e}_EeV"
+    out_path = os.path.join(args.outdir, f"area_vs_elevation_{tag}.npy")
+
+    np.save(
+        out_path,
+        np.column_stack([
+            minutes,
+            np.array(mean_elevations),
+            np.array(effective_areas)
+        ])
+    )
+    print(f"  => Saved: {out_path}\n")
+
+print("Done.")
