@@ -80,7 +80,7 @@ def grammage(exitpoint, ints, axis):
             points = ints[in_order][-1] + np.linspace(0, distance, 101)[:,None]*axis
             radii = np.linalg.norm(points, axis=1)
             # calculate the grammage traversed
-            return (traversed * 2.6e+15 * 1e-10) + np.trapz(f(radii), dx=distance/100)*1e-10
+            return (traversed * 2.6e+15 * 1e-10) + np.trapezoid(f(radii), dx=distance/100)*1e-10
 
     # if mesh intersections == 0, then the tau is steeply up-going
     # for this, we assume the Earth is a sphere
@@ -92,7 +92,7 @@ def grammage(exitpoint, ints, axis):
         points = exitpoint + np.linspace(0, distance, 101)[:,None]*axis
         radii = np.linalg.norm(points, axis=1)
         # calculate the grammage traversed
-        return np.trapz(f(radii), dx=distance/100)*1e-10
+        return np.trapezoid(f(radii), dx=distance/100)*1e-10
     
 
 def find_grammage(trials, axis, TotalArea, BVH):

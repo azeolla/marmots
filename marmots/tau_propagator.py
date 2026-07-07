@@ -263,19 +263,23 @@ def propagate_single_track(segments: list,
     for seg in segments:
         L        = seg["length"]
         material = seg["type"]
-
+        
         if material == "air":
             P_total       *= psurv_air(E, L)
             last_air_start = seg["start"]
 
         else:  # rock
-            grammage = L * 1e5 * RHO_ROCK          # g/cm²
-            P_total *= float(psurvival_lut(E, L))
+            grammage = L * 1e5 * RHO_ROCK 
+          
+            #P_total *= np.float64(psurvival_lut(E, L))
+            P_total *= psurvival_lut(E, L).item()
+          
             E        = tau_energy_loss(grammage, E, a0, a1, a2)
 
         # early exit if tau is essentially absorbed
         if P_total < 1e-10:
             return 0.0, E, last_air_start
+  
 
     return P_total, E, last_air_start
 

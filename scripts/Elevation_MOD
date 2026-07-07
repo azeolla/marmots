@@ -25,7 +25,7 @@ import numpy as np
 from astropy.time import Time
 from astropy.coordinates import SkyCoord, EarthLocation, AltAz
 import astropy.units as u
-from scipy.optimize import root_scalar, brentq
+from scipy.optimize import brentq
 
 import marmots.effective_area as effective_area
 from marmots.tauexit import TauExitLUT
@@ -111,7 +111,7 @@ parser.add_argument(
 
 parser.add_argument(
     "--elev-window-min", type=float, default=-8.0,
-    help="Lower bound of the elevation window in degrees (default: -20). "
+    help="Lower bound of the elevation window in degrees (default: -8). "
          "Only time steps where the source elevation is >= this value are evaluated."
 )
 parser.add_argument(
@@ -129,6 +129,20 @@ parser.add_argument(
     help="Hours around --time to search for the elevation window (default: 24)."
 )
 parser.add_argument(
+    "--coarse-points", type=int, default=20000,
+    help="Number of points used for the coarse scan that locates the elevation "
+         "window (default: 20000). Increase this if the source moves slowly in "
+         "elevation (e.g. dec close to the array latitude) and the window is "
+         "being missed or mis-detected."
+)
+parser.add_argument(
+    "--occurrence", type=int, default=1,
+    help="Which occurrence of the elevation window to use within the search "
+         "window, counting from 1 (default: 1, i.e. the first one found). "
+         "Useful when the source enters the window more than once (e.g. once "
+         "rising, once setting)."
+)
+parser.add_argument(
     "--outdir", type=str,
     help="Output directory for .npy files."
 )
@@ -137,7 +151,7 @@ parser.add_argument(
 args = parser.parse_args()
 os.makedirs(args.outdir, exist_ok=True)
 
-# Sanity check  # NEW
+# Sanity check
 if args.elev_window_min >= args.elev_window_max:
     raise ValueError(
         f"--elev-window-min ({args.elev_window_min}) must be "
@@ -188,7 +202,7 @@ det      = Detector(args.model, freqs, args.gain)
 
 
 # =======================
-# SOURCE & TIME SETUP  
+# SOURCE & TIME SETUP
 # =======================
 
 source_coord = SkyCoord(ra=args.ra * u.deg, dec=args.dec * u.deg)
@@ -210,13 +224,43 @@ def source_elevation(dt_hour):
     return altaz.alt.deg
 
 
-# We scan a coarse grid to locate the bracket, then refine with brentq.
+def find_root_near(func, x_lo, x_hi, n_refine=200):
+    """
+    Robustly find a single root of `func` between x_lo and x_hi.
+
+    Instead of assuming the coarse bracket already contains a clean sign
+    change, we resample the interval finely and scan for the first actual
+    sign change. This is what lets the search work regardless of how slowly
+    the source moves in elevation (e.g. dec close to the station latitude)
+    or which direction it is crossing the boundary.
+    """
+    xs = np.linspace(x_lo, x_hi, n_refine)
+    fs = np.array([func(x) for x in xs])
+
+    sign_changes = np.where(np.diff(np.sign(fs)) != 0)[0]
+
+    if len(sign_changes) == 0:
+        # No clean sign change found in this neighborhood; fall back to the
+        # point with the smallest |f| as an approximate crossing.
+        i_best = np.argmin(np.abs(fs))
+        return xs[i_best]
+
+    i = sign_changes[0]
+    try:
+        return brentq(func, xs[i], xs[i + 1])
+    except ValueError:
+        i_best = np.argmin(np.abs(fs))
+        return xs[i_best]
+
+
+# We scan a coarse (but fine enough) grid to locate all window occurrences,
+# then refine each boundary with a robust local root search.
 print(f"\nSearching for elevation window "
       f"[{args.elev_window_min:.1f}°, {args.elev_window_max:.1f}°] "
       f"within ±{args.search_window/2:.0f} h of {args.time} ...")
 
 half_search = args.search_window / 2.0
-coarse_dt   = np.linspace(-half_search, half_search, 2000)
+coarse_dt   = np.linspace(-half_search, half_search, args.coarse_points)
 coarse_elev = np.array([source_elevation(dt) for dt in coarse_dt])
 
 # Mask of hours inside the elevation window
@@ -231,66 +275,75 @@ if not np.any(inside):
         f"Try widening --search-window or adjusting the elevation bounds."
     )
 
-# The window might appear more than once per day (rising + setting).
-# We take the *first* continuous block.
-idx_inside  = np.where(inside)[0]
-# Detect gaps > 1 step to find separate blocks
-gaps        = np.where(np.diff(idx_inside) > 1)[0]
-if len(gaps) > 0:
-    first_block = idx_inside[: gaps[0] + 1]
-    print(f"  NOTE: source enters the window {len(gaps)+1} time(s); "
-          f"using the first occurrence.")
-else:
-    first_block = idx_inside
+# The window may appear more than once per day (rising + setting, or even
+# more if --search-window is large). Identify *all* continuous blocks.
+idx_inside = np.where(inside)[0]
+gaps       = np.where(np.diff(idx_inside) > 1)[0]
 
-dt_enter_approx = coarse_dt[first_block[0]]
-dt_exit_approx  = coarse_dt[first_block[-1]]
+block_starts = np.concatenate(([idx_inside[0]], idx_inside[gaps + 1])) if len(gaps) > 0 else np.array([idx_inside[0]])
+block_ends   = np.concatenate((idx_inside[gaps], [idx_inside[-1]]))     if len(gaps) > 0 else np.array([idx_inside[-1]])
 
-# Refine entry / exit times with brentq  # NEW
-def f_enter(dt):
-    return source_elevation(dt) - args.elev_window_min
+n_blocks = len(block_starts)
+print(f"  Source enters the elevation window {n_blocks} time(s) "
+      f"within the search window.")
 
-def f_exit(dt):
-    return source_elevation(dt) - args.elev_window_max
-
-# Entry: source crosses elev_window_min going up (or elev_window_max going down).
-# We determine direction from the coarse data.
-elev_enter = coarse_elev[first_block[0]]
-elev_exit  = coarse_elev[first_block[-1]]
-
-# Use a small bracket around the approximate crossing  # CHANGED
-bracket_margin = (coarse_dt[1] - coarse_dt[0]) * 3   # 3 coarse steps
-
-try:
-    # Entry crossing: source elevation == elev_window_min
-    sol_enter = brentq(
-        f_enter,
-        coarse_dt[max(first_block[0] - 3, 0)],
-        coarse_dt[min(first_block[0] + 3, len(coarse_dt) - 1)]
+if args.occurrence < 1 or args.occurrence > n_blocks:
+    raise ValueError(
+        f"--occurrence {args.occurrence} requested, but only {n_blocks} "
+        f"occurrence(s) of the elevation window were found within "
+        f"±{half_search:.0f} h of {args.time}. Valid range: 1..{n_blocks}."
     )
-except ValueError:
-    sol_enter = dt_enter_approx
 
-try:
-    # Exit crossing: source elevation == elev_window_max  (if source rises into window)
-    # or elev_window_min (if source falls out).  Use the coarser boundary.
-    sol_exit = brentq(
-        f_exit,
-        coarse_dt[max(first_block[-1] - 3, 0)],
-        coarse_dt[min(first_block[-1] + 3, len(coarse_dt) - 1)]
-    )
-except ValueError:
-    sol_exit = dt_exit_approx
+block_idx   = args.occurrence - 1
+idx_start   = block_starts[block_idx]
+idx_end     = block_ends[block_idx]
 
-# Ensure ordering  # NEW
+# Margin (in coarse-grid steps) used to bracket each boundary crossing when
+# refining. A handful of steps is enough since we now resample finely inside
+# find_root_near() regardless of how coarse the original grid was.
+step      = coarse_dt[1] - coarse_dt[0]
+margin_lo = max(idx_start - 3, 0)
+margin_hi = min(idx_start + 3, len(coarse_dt) - 1)
+margin_lo2 = max(idx_end - 3, 0)
+margin_hi2 = min(idx_end + 3, len(coarse_dt) - 1)
+
+elev_at_start = coarse_elev[idx_start]
+elev_at_end   = coarse_elev[idx_end]
+
+# Determine which boundary (elev_window_min or elev_window_max) is actually
+# being crossed at the start and at the end of this block. This is what
+# makes the script work regardless of whether the source is rising or
+# setting through the window (previously this was hard-coded as "rising").
+target_start = (
+    args.elev_window_min
+    if abs(elev_at_start - args.elev_window_min) <= abs(elev_at_start - args.elev_window_max)
+    else args.elev_window_max
+)
+target_end = (
+    args.elev_window_max
+    if abs(elev_at_end - args.elev_window_max) <= abs(elev_at_end - args.elev_window_min)
+    else args.elev_window_min
+)
+
+def f_start(dt):
+    return source_elevation(dt) - target_start
+
+def f_end(dt):
+    return source_elevation(dt) - target_end
+
+sol_enter = find_root_near(f_start, coarse_dt[margin_lo], coarse_dt[margin_hi])
+sol_exit  = find_root_near(f_end,   coarse_dt[margin_lo2], coarse_dt[margin_hi2])
+
+# Ensure ordering
 if sol_enter > sol_exit:
     sol_enter, sol_exit = sol_exit, sol_enter
 
-print(f"  Elevation window: "
+direction = "rising" if elev_at_end >= elev_at_start else "setting"
+print(f"  Elevation window ({direction}): "
       f"t_anchor + {sol_enter:+.3f} h  →  t_anchor + {sol_exit:+.3f} h "
       f"(duration {(sol_exit - sol_enter)*60:.1f} min)")
 
-# Build the final time array *inside* the window  # CHANGED
+# Build the final time array *inside* the window
 dt_hours = np.linspace(sol_enter, sol_exit, args.ntimes)
 times    = t_anchor + dt_hours * u.hour
 minutes  = dt_hours * 60.0   # minutes relative to t_anchor
