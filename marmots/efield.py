@@ -433,21 +433,33 @@ def compute_cos_eta(
 
     for i in range(n_ev):
 
-        # unit vector from decay point to station in geocentric coords
+        # vector unitario del decay a la estacion
         r_vec = observatory_geocentric - decay_point[i]
         r_hat = r_vec / np.linalg.norm(r_vec)
 
-        # shower direction unit vector in ENU
+        # direccion del shower
         V = np.array([
             np.sin(np.deg2rad(decay_zen[i])) * np.cos(np.deg2rad(decay_az[i])),
             np.sin(np.deg2rad(decay_zen[i])) * np.sin(np.deg2rad(decay_az[i])),
             np.cos(np.deg2rad(decay_zen[i])),
         ])
 
-        # geomagnetic polarisation: V×B normalised
-        VxB     = np.cross(V, Bhat)
-        pol_geo = VxB / np.linalg.norm(VxB)
+        #
+        VxB  = np.cross(V, Bhat)
+        e1   = VxB / np.linalg.norm(VxB)          #geomag direction (V×B̂)
+        Ve1  = np.cross(V, e1)
+        e2   = Ve1 / np.linalg.norm(Ve1)           
 
-        cos_eta[i] = np.dot(r_hat, pol_geo)
+        # shower plane proyection of r_hat 
+        beta  = np.dot(r_hat, e1)
+        delta = np.dot(r_hat, e2)
+
+        # cos(eta) angle inside the shower plane 
+        proj_norm = np.sqrt(beta**2 + delta**2)
+        if proj_norm > 0:
+            cos_eta[i] = beta / proj_norm
+        else:
+            cos_eta[i] = 0.0
 
     return cos_eta
+
