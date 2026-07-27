@@ -433,11 +433,11 @@ def compute_cos_eta(
 
     for i in range(n_ev):
 
-        # vector unitario del decay a la estacion
+        # vector 
         r_vec = observatory_geocentric - decay_point[i]
         r_hat = r_vec / np.linalg.norm(r_vec)
 
-        # direccion del shower
+        #  shower direction
         V = np.array([
             np.sin(np.deg2rad(decay_zen[i])) * np.cos(np.deg2rad(decay_az[i])),
             np.sin(np.deg2rad(decay_zen[i])) * np.sin(np.deg2rad(decay_az[i])),
