@@ -19,6 +19,12 @@ from marmots.constants import Re
 
 from numba import jit, njit
 
+import warnings
+from numba.core.errors import NumbaDeprecationWarning, NumbaPendingDeprecationWarning
+
+warnings.simplefilter('ignore', NumbaDeprecationWarning)
+warnings.simplefilter('ignore', NumbaPendingDeprecationWarning)
+
 __all__ = [
     "view_angle",
     "geometric_area",

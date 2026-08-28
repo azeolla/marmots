@@ -147,7 +147,7 @@ taudecay = Tau_Decay_Simulator(pol="negative")
 det = Detector(args.model, freqs, args.gain)
 
 print("Generating topographic mesh...")
-totalmesh = horizon_mesh(lat, lon, altitude, orientations, fov)
+totalmesh = horizon_mesh(lat, lon, altitude, orientations, fov, distance=200)
 
 print("Generating BVH tree...")
 BVH = create_BVH_tree(totalmesh)

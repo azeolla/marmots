@@ -34,7 +34,7 @@ def entrance_point(vector, exit_point):
     p = exit_point - vector*t
     d = np.linalg.norm(p)
     
-    i = np.sqrt(radius**2 - d**2)
+    i = np.sqrt(np.maximum(radius**2 - d**2, 0))
 
     P = exit_point - vector*(t - i)
         

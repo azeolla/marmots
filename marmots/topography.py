@@ -20,6 +20,12 @@ from pyproj import Transformer
 
 from marmots import srtm_directory
 
+import warnings
+from numba.core.errors import NumbaDeprecationWarning, NumbaPendingDeprecationWarning
+
+warnings.simplefilter('ignore', NumbaDeprecationWarning)
+warnings.simplefilter('ignore', NumbaPendingDeprecationWarning)
+
 latlon2xyz = Transformer.from_crs("EPSG:4326", "EPSG:4328")
 xyz2latlon = Transformer.from_crs("EPSG:4328", "EPSG:4326")
 sinusoidal = Transformer.from_crs("EPSG:4326", "ESRI:54008")

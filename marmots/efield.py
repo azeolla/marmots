@@ -17,7 +17,10 @@ from marmots.constants import Re
 import os, sys
 
 import warnings
-warnings.filterwarnings("ignore", category=DeprecationWarning) 
+from numba.core.errors import NumbaDeprecationWarning, NumbaPendingDeprecationWarning
+
+warnings.simplefilter('ignore', NumbaDeprecationWarning)
+warnings.simplefilter('ignore', NumbaPendingDeprecationWarning)
 
 
 @attr.s

@@ -11,6 +11,12 @@ from numba import njit
 
 from marmots import data_directory
 
+import warnings
+from numba.core.errors import NumbaDeprecationWarning, NumbaPendingDeprecationWarning
+
+warnings.simplefilter('ignore', NumbaDeprecationWarning)
+warnings.simplefilter('ignore', NumbaPendingDeprecationWarning)
+
 
 @attr.s
 class TauExitLUT:
