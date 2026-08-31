@@ -1,0 +1,234 @@
+#!/usr/bin/env python3
+
+if __name__ == "__main__":
+
+    import argparse
+
+    # create the argument parser
+    parser = argparse.ArgumentParser(
+        description=("Plot the integrated geometric area " " of a given BEACON prototype.")
+    )
+    parser.add_argument(
+        "--Enu",
+        type=float,
+        required=True,
+        help="The energy of the primary neutrino [EeV].",
+    )
+    parser.add_argument(
+        "--stations",
+        type=str,
+        default=None,
+        help="The file containing the lat, lon, altitude, and orientation of each station.",
+    )
+    parser.add_argument(
+        "--nside",
+        type=int,
+        default=16,
+        help="Changes the resolution of the skymap.",
+    )
+    parser.add_argument(
+        "--ntrials",
+        type=int,
+        required=True,
+        help="The number of MC trials per elevation angle.",
+    )
+    parser.add_argument(
+        "--bandwidth",
+        type=int,
+        nargs=2,
+        default=[30, 80],
+        help="The range of frequencies (30 80) [MHz]."
+    )
+    parser.add_argument(
+        "--trigger",
+        type=float,
+        default=5.0,
+        help="The SNR trigger threshold (5)."
+    )
+    parser.add_argument(
+        "--max-view",
+        type=float,
+        default=3.0,
+        help="The maximum view angle for trials (3.0) [degrees].",
+    )
+    parser.add_argument(
+        "--min-elev",
+        type=float,
+        default=-30,
+        help="The minimum elevation angle to a source to consider.",
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        choices=['prototype', 'matched', 'rhombic'],
+        default="prototype",
+        help="The antenna model to use. Defaults to 'prototype'.",
+    )
+    parser.add_argument(
+        "--gain",
+        type=float,
+        default=4,
+        help="Constant gain over the bandwidth (4) [dBi].",
+    )
+    parser.add_argument(
+        "--time",
+        type=str,
+        default="2025-03-20 12:00:00",
+        help="The date and time (UTC) to simulate.",
+    )
+    parser.add_argument(
+        "--save-plot",
+        type=str,
+        default=None,
+        help="The filename to save the plot into.",
+    )
+    parser.add_argument(
+        "--save", type=str, default=None, help="The directory to save the data into."
+    )
+    parser.add_argument(
+        "--num-cpus",
+        type=int,
+        default=1,
+        help="The number of CPU cores to use."
+    )
+
+    # parse the args
+    args = parser.parse_args()
+
+import healpy as hp
+from p_tqdm import p_map
+import numpy as np
+import marmots.effective_area as effective_area
+from marmots.tauexit import TauExitLUT
+from marmots.efield import EFieldParam
+from marmots.pythia import Tau_Decay_Simulator
+from marmots.antenna import Detector
+from marmots.topography import horizon_mesh, get_elevation
+from marmots.mesh import create_BVH_tree
+import matplotlib.pyplot as plt
+
+'''
+# the number of pixels in the healpy skymap, determined by nside
+npix = hp.nside2npix(args.nside)
+
+# the location of each pixel
+theta, phi = np.degrees(hp.pix2ang(nside=args.nside, ipix = np.arange(npix)))
+
+dec = (90 - theta)
+ra = phi
+'''
+
+stations = np.loadtxt(args.stations).T
+
+lat = stations[0][12]
+lon = stations[1][12]
+# we will load in actual altitudes
+orientations = stations[3][12]
+fov = stations[4][12]
+antennas = stations[5][12]
+
+lat = np.atleast_1d(lat)
+lon = np.atleast_1d(lon)
+orientations = np.atleast_1d(orientations)
+fov = np.atleast_1d(fov)
+antennas = np.atleast_1d(antennas)
+altitude = (get_elevation(lat, lon) + 3)/1e3
+
+freqs = np.arange(args.bandwidth[0], args.bandwidth[1], 10)+5
+
+# load the corresponding tau exit LUT
+Enu = args.Enu * 1e18
+tauexit = TauExitLUT(energy=Enu, thickness=0)
+
+# load the field parameterization.
+voltage = EFieldParam()
+
+taudecay = Tau_Decay_Simulator(pol="negative")
+
+det = Detector(args.model, freqs, args.gain)
+
+print("Generating topographic mesh...")
+totalmesh = horizon_mesh(lat, lon, altitude, orientations, fov, distance=200)
+
+print("Generating BVH tree...")
+BVH = create_BVH_tree(totalmesh)
+
+from astropy.coordinates import SkyCoord, EarthLocation, AltAz
+from astropy.time import Time
+import astropy.units as u
+import numpy as np
+
+# Arrays
+alt = np.arange(-10.,5., 0.5)  # degrees
+az = (90-np.arange(120., 180.+61)) % 360 # Astropy convention!
+
+alt_grid, az_grid = np.meshgrid(alt, az, indexing="ij")
+
+# Observer
+location = EarthLocation(
+    lat=lat[0]*u.deg,
+    lon=lon[0]*u.deg,
+    height=altitude[0]*u.km
+)
+
+# Observation time
+obstime = Time('2025-03-20 12:00:00')
+
+# Create AltAz coordinates
+coords_altaz = SkyCoord(
+    alt=alt_grid*u.deg,
+    az=az_grid*u.deg,
+    frame=AltAz(obstime=obstime, location=location)
+)
+
+# Transform to ICRS
+coords_icrs = coords_altaz.icrs
+
+ra = coords_icrs.ra.deg.flatten()
+dec = coords_icrs.dec.deg.flatten()
+
+
+print("Beginning loop over source positions...")
+def pix_loop(i):
+    # calculate the effective area
+    results = effective_area.calculate(
+        ra[i],
+        dec[i],
+        totalmesh,
+        BVH,
+        lat,
+        lon, 
+        altitude,
+        orientations,
+        fov,
+        antennas,
+        tauexit,
+        voltage,
+        taudecay,
+        det,
+        np.radians(args.max_view),
+        args.ntrials,
+        freqs,
+        args.trigger,
+        np.radians(args.min_elev),
+        args.time,
+    )
+
+    return results
+
+results = p_map(pix_loop, np.arange(ra.size), **{"num_cpus": args.num_cpus})
+
+results = np.array(results).T
+
+geometric = results[0]
+pexit = results[1]
+pdet = results[2]
+effective = results[3]
+
+# and save the plot if desired
+if args.save:
+    
+    np.save(args.save+"geometric.npy", geometric)
+    np.save(args.save+"pexit.npy", pexit)
+    np.save(args.save+"pdet.npy", pdet)
+    np.save(args.save+"effective.npy", effective)

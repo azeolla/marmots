@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+
+if __name__ == "__main__":
+
+    import argparse
+
+    # create the argument parser
+    parser = argparse.ArgumentParser(
+        description=("Plot the integrated geometric area " " of a given BEACON prototype.")
+    )
+    parser.add_argument(
+        "--Enu",
+        type=float,
+        required=True,
+        help="The energy of the primary neutrino [EeV].",
+    )
+    parser.add_argument(
+        "--ra",
+        type=float,
+        required=True,
+        help="Right ascension of the source [deg].",
+    )
+    parser.add_argument(
+        "--dec",
+        type=float,
+        required=True,
+        help="Declination of the source [deg].",
+    )
+    parser.add_argument(
+        "--stations",
+        type=str,
+        default=None,
+        help="The file containing the lat, lon, altitude, and orientation of each station.",
+    )
+    parser.add_argument(
+        "--ntrials",
+        type=int,
+        required=True,
+        help="The number of MC trials per elevation angle.",
+    )
+    parser.add_argument(
+        "--bandwidth",
+        type=int,
+        nargs=2,
+        default=[30, 80],
+        help="The range of frequencies (30 80) [MHz]."
+    )
+    parser.add_argument(
+        "--trigger",
+        type=float,
+        default=5.0,
+        help="The SNR trigger threshold (5)."
+    )
+    parser.add_argument(
+        "--max-view",
+        type=float,
+        default=3.0,
+        help="The maximum view angle for trials (3.0) [degrees].",
+    )
+    parser.add_argument(
+        "--min-elev",
+        type=float,
+        default=-30,
+        help="The minimum elevation angle to a source to consider.",
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        choices=['prototype', 'matched', 'rhombic'],
+        default="prototype",
+        help="The antenna model to use. Defaults to 'prototype'.",
+    )
+    parser.add_argument(
+        "--gain",
+        type=float,
+        default=4,
+        help="Constant gain over the bandwidth (4) [dBi].",
+    )
+    parser.add_argument(
+        "--time",
+        type=str,
+        default="2025-03-20 12:00:00",
+        help="The date and time (UTC) to simulate.",
+    )
+    parser.add_argument(
+        "--save", type=str, default=None, help="The directory to save the data into."
+    )
+    parser.add_argument(
+        "--num-cpus",
+        type=int,
+        default=1,
+        help="The number of CPU cores to use."
+    )
+
+    # parse the args
+    args = parser.parse_args()
+
+import healpy as hp
+from p_tqdm import p_map
+import numpy as np
+import marmots.effective_area as effective_area
+from marmots.tauexit import TauExitLUT
+from marmots.efield import EFieldParam
+from marmots.pythia import Tau_Decay_Simulator
+from marmots.antenna import Detector
+from marmots.topography import horizon_mesh, get_elevation
+from marmots.mesh import create_BVH_tree
+import matplotlib.pyplot as plt
+from astropy.time import Time
+from astropy import units as u
+
+stations = np.loadtxt(args.stations).T
+
+lat = stations[0]
+lon = stations[1]
+altitude = stations[2]
+orientations = stations[3]
+fov = stations[4]
+antennas = stations[5]
+
+lat = np.atleast_1d(lat)
+lon = np.atleast_1d(lon)
+altitude = np.atleast_1d(altitude)
+orientations = np.atleast_1d(orientations)
+fov = np.atleast_1d(fov)
+antennas = np.atleast_1d(antennas)
+
+freqs = np.arange(args.bandwidth[0], args.bandwidth[1], 10)+5
+
+# load the corresponding tau exit LUT
+Enu = args.Enu * 1e18
+tauexit = TauExitLUT(energy=Enu, thickness=0)
+
+# load the field parameterization.
+voltage = EFieldParam()
+
+taudecay = Tau_Decay_Simulator(pol="negative")
+
+det = Detector(args.model, freqs, args.gain)
+
+observing_time = Time(args.time)
+mins = np.arange(0,1.5*60+1,1)
+times = []
+for i in range(mins.size):
+    times.append((observing_time + mins[i]*u.min).value)
+
+print("Generating topographic mesh...")
+totalmesh = horizon_mesh(lat, lon, altitude, orientations, fov)
+
+print("Generating BVH tree...")
+BVH = create_BVH_tree(totalmesh)
+
+print("Beginning loop over source positions...")
+def pix_loop(i):
+    # calculate the effective area
+    results = effective_area.calculate(
+        args.ra,
+        args.dec,
+        totalmesh,
+        BVH,
+        lat,
+        lon, 
+        altitude,
+        orientations,
+        fov,
+        antennas,
+        tauexit,
+        voltage,
+        taudecay,
+        det,
+        np.radians(args.max_view),
+        args.ntrials,
+        freqs,
+        args.trigger,
+        np.radians(args.min_elev),
+        times[i],
+    )
+
+    return results
+
+
+results = p_map(pix_loop, np.arange(len(times)), **{"num_cpus": args.num_cpus})
+
+results = np.array(results).T
+
+geometric = results[0]
+pexit = results[1]
+pdet = results[2]
+effective = results[3]
+
+# and save if desired
+if args.save:
+    
+    np.save(args.save+"geometric.npy", geometric)
+    np.save(args.save+"pexit.npy", pexit)
+    np.save(args.save+"pdet.npy", pdet)
+    np.save(args.save+"effective.npy", effective)
