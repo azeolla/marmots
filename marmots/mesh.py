@@ -67,9 +67,9 @@ def intersect_ray_aabb(ray_origin, ray_direction, bounding_box):
     t_exit = np.min(np.maximum(t_min, t_max))
     
     # Check if the ray is inside the bounding box
-    inside_bbox = np.all(ray_origin >= bounding_box[0]) and np.all(ray_origin <= bounding_box[1])
+    #inside_bbox = np.all(ray_origin >= bounding_box[0]) and np.all(ray_origin <= bounding_box[1])
     
-    return (inside_bbox or t_exit >= 0) and (t_enter <= t_exit)
+    return (t_exit >= 0) and (t_enter <= t_exit)
 
 
 def intersect_bvh(root_node, ray_origin, ray_direction):
@@ -143,14 +143,9 @@ def intersect_segment_aabb(segment_start, segment_end, bounding_box):
 
     t_enter = np.max(np.minimum(t_min, t_max))
     t_exit = np.min(np.maximum(t_min, t_max))
-
-    segment_length = np.linalg.norm(segment_direction)
-
-    # Check if the segment is inside the bounding box
-    inside_bbox = np.all(segment_start >= bounding_box[0]) and np.all(segment_start <= bounding_box[1])
     
     # Check if the intersection is within the segment's length
-    return (inside_bbox or (t_exit >= 0 and t_enter <= segment_length)) and (t_enter <= t_exit)
+    return t_enter <= t_exit and t_exit >= 0.0 and t_enter <= 1.0
 
 
 def intersect_bvh_with_segment(root_node, segment_start, segment_end):

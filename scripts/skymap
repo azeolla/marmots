@@ -170,12 +170,13 @@ def pix_loop(i):
         voltage,
         taudecay,
         det,
-        np.radians(args.max_view),
-        args.ntrials,
-        freqs,
-        args.trigger,
-        np.radians(args.min_elev),
-        args.time,
+        psurvival_lut=None,
+        maxview=np.radians(args.max_view),
+        N=args.ntrials,
+        freqs=freqs,
+        trigger_SNR=args.trigger,
+        min_elev=np.radians(args.min_elev),
+        time=args.time,
     )
 
     return results
