@@ -140,7 +140,7 @@ Enu = args.Enu * 1e18
 tauexit = TauExitLUT(energy=Enu, thickness=0)
 
 # load the field parameterization.
-voltage = EFieldParam()
+voltage = EFieldParam(freqs)
 
 taudecay = Tau_Decay_Simulator(pol="negative")
 

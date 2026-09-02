@@ -15,9 +15,9 @@ and the unit vector from the decay point to the station (r_hat_{tau->Ant}).
 import os.path as path
 from typing import Tuple
 
-import attr
 import numpy as np
 from interpolation.splines import CGrid, eval_linear, extrap_options
+from scipy.interpolate import interp1d
 from numba import njit
 
 import marmots.geometry as geometry
@@ -28,7 +28,6 @@ import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 
-@attr.s
 class EFieldParam():
     """
     Load and sample the BEACON E-field parameterization.
@@ -42,7 +41,12 @@ class EFieldParam():
         sim_Bsinalpha = sim_Bmag * sin(90 deg) = 50000 nT
     """
 
-    param_dir = path.join(data_directory, "e_field_library")
+    def __init__(self, freqs) -> None:
+        """Loads data files."""
+
+        self.param_dir = path.join(data_directory, "e_field_library")
+        
+        self.load_file(freqs)
 
     def __call__(
         self,
@@ -228,10 +232,6 @@ class EFieldParam():
 
         return voltage
 
-    def __attrs_post_init__(self) -> None:
-        """Called at end of __init__. Loads data files."""
-        self.load_file()
-
     def load_file(self) -> None:
         """
         Load the LUT and geomagnetic field map, and store ZHAireS sim parameters.
@@ -281,17 +281,36 @@ class EFieldParam():
 
         # grid axes: [freq(MHz), hdecay(km), theta_decay(deg), distance(km), view(deg)]
         self.lut_axes   = lut["grid"]
-        self.values_geo = lut["efield_geomagnetic"]  # (n_freq, n_h, n_t, n_d, n_v)
-        self.values_ask = lut["efield_askaryan"]
+        values_geo = lut["efield_geomagnetic"]  # (n_freq, n_h, n_t, n_d, n_v)
+        values_ask = lut["efield_askaryan"]
 
         # CGrid for numba interpolation
         self.lut_cgrid = CGrid(
-            self.lut_axes[0].astype(float),
+            #self.lut_axes[0].astype(float),
             self.lut_axes[1].astype(float),
             self.lut_axes[2].astype(float),
             self.lut_axes[3].astype(float),
             self.lut_axes[4].astype(float),
         )
+
+        freq_interp_geo = interp1d(
+            self.lut_axes[0].astype(float),
+            values_geo,
+            axis=0,
+            kind="linear",
+            bounds_error=True,
+        )
+
+        freq_interp_ask = interp1d(
+            self.lut_axes[0].astype(float),
+            values_ask,
+            axis=0,
+            kind="linear",
+            bounds_error=True,
+        )
+
+        self.values_geo = freq_interp_geo(freqs)
+        self.values_ask = freq_interp_ask(freqs)
 
 
 # ========================================================================== #
@@ -302,14 +321,13 @@ class EFieldParam():
 def efield_interp(
     grid,
     values: np.ndarray,
-    freqs: np.ndarray,
     decay: np.ndarray,
     zenith: np.ndarray,
     distance: np.ndarray,
     view: np.ndarray,
 ) -> np.ndarray:
     """
-    5D linear interpolation over (freq, hdecay, theta_decay, distance, view).
+    4D linear interpolation over (hdecay, theta_decay, distance, view).
 
     Parameters
     ----------
@@ -333,7 +351,7 @@ def efield_interp(
     out: np.ndarray
         Shape (n_freqs, n_events).
     """
-    n_freqs  = freqs.shape[-1]
+    n_freqs  = values.shape[0]
     n_events = zenith.shape[-1]
     out = np.empty((n_freqs, n_events), dtype=np.float64)
 
@@ -346,13 +364,12 @@ def efield_interp(
 
     for i in range(n_freqs):
         pts = np.column_stack((
-            np.repeat(freqs[i], n_events),
             decay,
             zenith,
             distance,
             psi,
         ))
-        out[i, :] = eval_linear(grid, values, pts)
+        out[i, :] = eval_linear(grid, values[i], pts)
 
     return out
 
@@ -395,6 +412,7 @@ def geomag(
     return mag, sinVB
 
 
+@njit
 def compute_cos_eta(
     decay_zen: np.ndarray,
     decay_az: np.ndarray,
