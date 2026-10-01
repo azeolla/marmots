@@ -25,8 +25,10 @@ from marmots import data_directory
 from marmots.constants import Re
 
 import warnings
-warnings.filterwarnings("ignore", category=DeprecationWarning)
+from numba.core.errors import NumbaDeprecationWarning, NumbaPendingDeprecationWarning
 
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.simplefilter('ignore', NumbaPendingDeprecationWarning)
 
 class EFieldParam():
     """
@@ -148,11 +150,11 @@ class EFieldParam():
         # ------------------------------------------------------------------ #
         E_geo = efield_interp(
             self.lut_cgrid, self.values_geo,
-            freqs, decay_alt_c, decay_zen_c, dist_c, view_c,
+            decay_alt_c, decay_zen_c, dist_c, view_c,
         )
         E_ask = efield_interp(
             self.lut_cgrid, self.values_ask,
-            freqs, decay_alt_c, decay_zen_c, dist_c, view_c,
+            decay_alt_c, decay_zen_c, dist_c, view_c,
         )
 
         # ------------------------------------------------------------------ #
@@ -203,7 +205,6 @@ class EFieldParam():
         # ------------------------------------------------------------------ #
         volt = detector.voltage_from_field(
             E_combined,
-            freqs,
             theta_c,
             (phi_c + 360) % 360,
         )                                                      # (n_events,)
@@ -232,7 +233,7 @@ class EFieldParam():
 
         return voltage
 
-    def load_file(self) -> None:
+    def load_file(self, freqs) -> None:
         """
         Load the LUT and geomagnetic field map, and store ZHAireS sim parameters.
 
